@@ -2,7 +2,18 @@
 // against the fixtures in this directory. Run with: node test-fixtures/check.js
 const fs = require("fs");
 const path = require("path");
-const { parseTektonDocument, resolveParamsTarget, findSeqIn, trimTrailingNewline } = require("../out/tekton/model");
+const {
+  parseTektonDocument,
+  resolveParamsTarget,
+  resolvePipelineSpecOwner,
+  resolveTaskSpecOwner,
+  pipelineTaskEntryMaps,
+  findEnclosingTaskEntry,
+  stepAndSidecarEntryMaps,
+  findEnclosingStepEntry,
+  findSeqIn,
+  trimTrailingNewline,
+} = require("../out/tekton/model");
 const { findParamRefs } = require("../out/tekton/paramRefs");
 const { closestMatch } = require("../out/tekton/levenshtein");
 const { findDuplicateGroups } = require("../out/tekton/duplicates");
@@ -416,6 +427,281 @@ console.log("\nrename: reject (not guess) when resolving an ambiguous name FROM 
   const ok = ok1 && ok2 && ok3;
   console.log(`  [${ok ? "PASS" : "FAIL"}] from-reference+ambiguous=reject(${ok1}), from-declaration=always-ok(${ok2}), from-reference+unambiguous=ok(${ok3})`);
   if (!ok) failures++;
+}
+
+// --- addTask / addConditional / bindParamToEnv: precise container detection ---
+//
+// The old implementations used findEnclosingMap() (innermost map at the
+// cursor, full stop) plus an ad-hoc ".get('name') truthy" check to decide
+// "is this a task/step entry?". A params-list item (`- name: repo`) inside
+// a task, or an env-list item inside a step, also has a `name` key —
+// cursor positioned there would be silently misidentified as the task/step
+// itself, corrupting the insert. pipelineTaskEntryMaps/
+// stepAndSidecarEntryMaps only ever consider actual list entries, so
+// membership is correct regardless of what's nested inside them.
+
+console.log("\naddConditional: precise task-entry detection (not just \"innermost map with a name field\"):");
+{
+  const source = fs.readFileSync(path.join(__dirname, "pipeline-typo.yaml"), "utf8");
+  const parsed = parseTektonDocument(source);
+
+  // Offset deep inside the "build" task's OWN params list item (name: repo).
+  const paramItemOffset = source.indexOf("name: repo") + 3;
+  const entry = findEnclosingTaskEntry(parsed, paramItemOffset);
+  const ok = entry?.get("name") === "build";
+  console.log(`  [${ok ? "PASS" : "FAIL"}] cursor inside task's own params item resolves to the task ("build"), not the params item`);
+  if (!ok) {
+    console.log({ resolvedName: entry?.get("name") });
+    failures++;
+  }
+}
+
+console.log("\nbindParamToEnv: precise step-entry detection:");
+{
+  const source = fs.readFileSync(path.join(__dirname, "task-two-steps.yaml"), "utf8");
+  const parsed = parseTektonDocument(source);
+
+  // Offset inside the "push" step's OWN existing env list item (name: EXISTING).
+  const envItemOffset = source.indexOf("name: EXISTING") + 3;
+  const entry = findEnclosingStepEntry(parsed, envItemOffset);
+  const ok = entry?.get("name") === "push";
+  console.log(`  [${ok ? "PASS" : "FAIL"}] cursor inside step's own env item resolves to the step ("push"), not the env item`);
+  if (!ok) {
+    console.log({ resolvedName: entry?.get("name") });
+    failures++;
+  }
+}
+
+console.log("\nresolvePipelineSpecOwner / resolveTaskSpecOwner: Run-inline-spec awareness:");
+{
+  const pipelineRunInline = parseTektonDocument(fs.readFileSync(path.join(__dirname, "pipelinerun-inline.yaml"), "utf8"));
+  const pipelineOwner = resolvePipelineSpecOwner(pipelineRunInline);
+  const ok1 = pipelineOwner !== undefined && findSeqIn(pipelineOwner.ownerMap, "tasks")?.items.length === 1;
+
+  const pipelineRunRef = parseTektonDocument(fs.readFileSync(path.join(__dirname, "pipelinerun-ref.yaml"), "utf8"));
+  const ok2 = resolvePipelineSpecOwner(pipelineRunRef) === undefined; // no inline pipelineSpec — nothing to add tasks to
+
+  const taskRunInline = parseTektonDocument(fs.readFileSync(path.join(__dirname, "taskrun-inline.yaml"), "utf8"));
+  const taskOwner = resolveTaskSpecOwner(taskRunInline);
+  const ok3 = taskOwner !== undefined && findSeqIn(taskOwner.ownerMap, "steps")?.items.length === 1;
+
+  const ok = ok1 && ok2 && ok3;
+  console.log(
+    `  [${ok ? "PASS" : "FAIL"}] pipelineRun+inline finds tasks(${ok1}), pipelineRun+ref finds nothing(${ok2}), taskRun+inline finds steps(${ok3})`
+  );
+  if (!ok) failures++;
+}
+
+/** Mirrors addTask.ts's own splicing logic (minus vscode calls). */
+function simulateAddTask(source, itemLines) {
+  const parsed = parseTektonDocument(source);
+  const owner = resolvePipelineSpecOwner(parsed);
+  if (!owner) return { owner: undefined };
+
+  const seq = findSeqIn(owner.ownerMap, "tasks");
+  let text, offset;
+  if (seq?.range) {
+    const lastItem = seq.items[seq.items.length - 1];
+    const rawAnchor = lastItem?.range ? lastItem.range[1] : seq.range[1];
+    offset = trimTrailingNewline(parsed.text, rawAnchor);
+    const lineStart = parsed.text.lastIndexOf("\n", seq.range[0] - 1) + 1;
+    const itemIndent = lastItem ? parsed.text.slice(lineStart, seq.range[0]) : owner.keyIndent + "  ";
+    text = blockAfterText(itemLines, itemIndent);
+  } else {
+    offset = trimTrailingNewline(parsed.text, owner.ownerMapEnd);
+    text = blockAfterText(["tasks:", ...itemLines.map((l) => "  " + l)], owner.keyIndent);
+  }
+  return { owner, result: source.slice(0, offset) + text + source.slice(offset) };
+}
+
+console.log("\naddTask simulation (context-aware target + no cursor):");
+{
+  const itemLines = ["- name: new-task", "  taskRef:", "    name: new-task-ref", "  runAfter: []", "  params: []"];
+
+  for (const file of ["pipeline-typo.yaml", "pipelinerun-inline.yaml"]) {
+    const source = fs.readFileSync(path.join(__dirname, file), "utf8");
+    const { owner, result } = simulateAddTask(source, itemLines);
+    const ok = owner !== undefined && (() => {
+      try {
+        const after = YAML.parse(result);
+        return containsNamedEntry(after, "new-task");
+      } catch {
+        return false;
+      }
+    })();
+    console.log(`  [${ok ? "PASS" : "FAIL"}] ${file} (append to existing tasks list)`);
+    if (!ok) {
+      console.log(result);
+      failures++;
+    }
+  }
+
+  // No spec.tasks list at all yet — must create it fresh, still cursor-independent.
+  {
+    const file = "pipeline-empty.yaml";
+    const source = fs.readFileSync(path.join(__dirname, file), "utf8");
+    const { owner, result } = simulateAddTask(source, itemLines);
+    let after, ok;
+    try {
+      after = YAML.parse(result);
+      ok = owner !== undefined && containsNamedEntry(after, "new-task") && Array.isArray(after.spec.tasks);
+    } catch {
+      ok = false;
+    }
+    console.log(`  [${ok ? "PASS" : "FAIL"}] ${file} (fresh tasks: list created)`);
+    if (!ok) {
+      console.log(result);
+      failures++;
+    }
+  }
+}
+
+/** Mirrors editUtils.ts's indentAt() — leading whitespace only, stopping before any "- " sequence marker. */
+function indentAtOffset(text, offset) {
+  const lineStart = text.lastIndexOf("\n", offset - 1) + 1;
+  const lineEnd = text.indexOf("\n", lineStart);
+  const line = text.slice(lineStart, lineEnd === -1 ? text.length : lineEnd);
+  return /^[ \t]*/.exec(line)[0];
+}
+
+/** Mirrors bindParamToEnv.ts's own splicing logic for both branches (append to existing env:, or create fresh). */
+function simulateBindParamToEnv(source, stepName, envName, paramName) {
+  const parsed = parseTektonDocument(source);
+  const container = stepAndSidecarEntryMaps(parsed).find((m) => m.get("name") === stepName);
+  if (!container?.range) return { container: undefined };
+
+  const existingEnv = container.get("env", true);
+  let text, offset;
+  if (existingEnv && existingEnv.range && Array.isArray(existingEnv.items)) {
+    const lastItem = existingEnv.items[existingEnv.items.length - 1];
+    const rawAnchor = lastItem?.range ? lastItem.range[1] : existingEnv.range[1];
+    offset = trimTrailingNewline(parsed.text, rawAnchor);
+    const indent = indentAtOffset(parsed.text, existingEnv.range[0]);
+    text = blockAfterText([`- name: ${envName}`, `  value: $(params.${paramName})`], indent);
+  } else {
+    const indent = indentAtOffset(parsed.text, container.range[0]);
+    offset = trimTrailingNewline(parsed.text, container.range[1]);
+    text = blockAfterText(["env:", `  - name: ${envName}`, `    value: $(params.${paramName})`], indent + "  ");
+  }
+  return { container, result: source.slice(0, offset) + text + source.slice(offset) };
+}
+
+console.log("\nbindParamToEnv simulation:");
+{
+  const source = fs.readFileSync(path.join(__dirname, "task-two-steps.yaml"), "utf8");
+
+  // "build" has no env: list yet — must create one.
+  {
+    const { container, result } = simulateBindParamToEnv(source, "build", "TARGET", "target");
+    let after, ok;
+    try {
+      after = YAML.parse(result);
+      const buildStep = after.spec.steps.find((s) => s.name === "build");
+      ok = container !== undefined && buildStep?.env?.some((e) => e.name === "TARGET");
+    } catch {
+      ok = false;
+    }
+    console.log(`  [${ok ? "PASS" : "FAIL"}] "build" step: fresh env: list created`);
+    if (!ok) {
+      console.log(result);
+      failures++;
+    }
+  }
+
+  // "push" already has an env: list — must append, not clobber EXISTING.
+  {
+    const { container, result } = simulateBindParamToEnv(source, "push", "TARGET", "target");
+    let after, ok;
+    try {
+      after = YAML.parse(result);
+      const pushStep = after.spec.steps.find((s) => s.name === "push");
+      ok =
+        container !== undefined &&
+        pushStep?.env?.some((e) => e.name === "TARGET") &&
+        pushStep?.env?.some((e) => e.name === "EXISTING");
+    } catch {
+      ok = false;
+    }
+    console.log(`  [${ok ? "PASS" : "FAIL"}] "push" step: appended to existing env: list, EXISTING entry preserved`);
+    if (!ok) {
+      console.log(result);
+      failures++;
+    }
+  }
+}
+
+/** Mirrors addConditional.ts's own splicing logic for both branches (append to existing when:, or create fresh). */
+function simulateAddConditional(source, taskName, inputExpr, values) {
+  const parsed = parseTektonDocument(source);
+  const taskEntry = pipelineTaskEntryMaps(parsed).find((m) => m.get("name") === taskName);
+  if (!taskEntry?.range) return { taskEntry: undefined };
+
+  const itemLines = [
+    `- input: ${quoteYamlString(inputExpr)}`,
+    `  operator: in`,
+    `  values: [${values.map((v) => quoteYamlString(v)).join(", ")}]`,
+  ];
+
+  const existingWhen = taskEntry.get("when", true);
+  let text, offset;
+  if (existingWhen && existingWhen.range && Array.isArray(existingWhen.items)) {
+    const lastItem = existingWhen.items[existingWhen.items.length - 1];
+    const rawAnchor = lastItem?.range ? lastItem.range[1] : existingWhen.range[1];
+    offset = trimTrailingNewline(parsed.text, rawAnchor);
+    const itemIndent = indentAtOffset(parsed.text, existingWhen.range[0]);
+    text = blockAfterText(itemLines, itemIndent);
+  } else {
+    const nameNode = taskEntry.get("name", true);
+    offset = trimTrailingNewline(parsed.text, nameNode?.range ? nameNode.range[1] : taskEntry.range[0]);
+    const taskIndent = indentAtOffset(parsed.text, taskEntry.range[0]);
+    text = blockAfterText(["when:", ...itemLines.map((l) => "  " + l)], taskIndent + "  ");
+  }
+  return { taskEntry, result: source.slice(0, offset) + text + source.slice(offset) };
+}
+
+console.log("\naddConditional simulation:");
+{
+  const source = fs.readFileSync(path.join(__dirname, "pipeline-typo.yaml"), "utf8");
+
+  // "build" has no when: yet.
+  {
+    const { taskEntry, result } = simulateAddConditional(source, "build", "$(params.deploy-env)", ["production"]);
+    let after, ok;
+    try {
+      after = YAML.parse(result);
+      const buildTask = after.spec.tasks.find((t) => t.name === "build");
+      ok = taskEntry !== undefined && buildTask?.when?.[0]?.values?.includes("production");
+    } catch {
+      ok = false;
+    }
+    console.log(`  [${ok ? "PASS" : "FAIL"}] "build" task: fresh when: added`);
+    if (!ok) {
+      console.log(result);
+      failures++;
+    }
+  }
+
+  // "deploy" already has a when: — must append, not clobber the existing condition.
+  {
+    const { taskEntry, result } = simulateAddConditional(source, "deploy", "$(params.image-repo)", ["ghcr.io"]);
+    let after, ok;
+    try {
+      after = YAML.parse(result);
+      const deployTask = after.spec.tasks.find((t) => t.name === "deploy");
+      ok =
+        taskEntry !== undefined &&
+        deployTask?.when?.length === 2 &&
+        deployTask.when.some((w) => w.values.includes("production")) &&
+        deployTask.when.some((w) => w.values.includes("ghcr.io"));
+    } catch {
+      ok = false;
+    }
+    console.log(`  [${ok ? "PASS" : "FAIL"}] "deploy" task: appended to existing when:, original condition preserved`);
+    if (!ok) {
+      console.log(result);
+      failures++;
+    }
+  }
 }
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) FAILED.`);

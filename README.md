@@ -68,22 +68,27 @@ file.
   *reference* pointing at an ambiguous name, the rename is rejected
   outright, since there's no principled way to know which same-named
   declaration the reference actually means.
-- **Commands** (Command Palette or editor context menu):
-  - `Tekton: Bind Parameter to Environment Variable` — pick a declared
-    param, name the env var, and it's inserted into the `env:` list of the
-    step/sidecar under your cursor (creating the list if needed).
+- **Commands** (Command Palette or editor context menu) — all four resolve
+  *where* to insert from the document's structure, not the cursor
+  position, wherever that's well-defined; where it genuinely isn't (which
+  task, which step — there can be several), the cursor is a fast path and a
+  picker is the fallback, never "insert wherever the cursor happens to be":
+  - `Tekton: Add Parameter` — always appends last in the correct list, and
+    is resource-aware: Pipeline/Task/ClusterTask/StepAction get a
+    declaration (name/type/description/default) under `spec.params`; a
+    PipelineRun/TaskRun using a `..Ref` gets a value binding (name/value)
+    instead, unless it embeds an inline Pipeline/Task via
+    `pipelineSpec`/`taskSpec`, in which case it gets a declaration there.
   - `Tekton: Add Task to Pipeline` — appends a new `spec.tasks[]` (or
-    `spec.finally[]`) entry with a `taskRef`/`runAfter`/`params` skeleton.
-  - `Tekton: Add When Expression to Task` — adds a `when:` condition to the
-    `spec.tasks[]` entry under your cursor.
-  - `Tekton: Add Parameter` — always appends the new parameter last in the
-    correct list, regardless of cursor position, and is resource-aware:
-    Pipeline/Task/ClusterTask/StepAction get a declaration
-    (name/type/description/default) under `spec.params`; a PipelineRun/
-    TaskRun using a `..Ref` gets a value binding (name/value) instead,
-    unless it embeds an inline Pipeline/Task via `pipelineSpec`/`taskSpec`,
-    in which case it gets a declaration there instead. The other three
-    editing commands still take their cue from the cursor for now.
+    `spec.finally[]`) entry with a `taskRef`/`runAfter`/`params` skeleton,
+    to a Pipeline or a PipelineRun's inline `pipelineSpec`.
+  - `Tekton: Add When Expression to Task` — adds a `when:` condition to a
+    task entry: the one under your cursor if there is one, otherwise pick
+    from a list of the Pipeline's tasks.
+  - `Tekton: Bind Parameter to Environment Variable` — pick a declared
+    param, name the env var, and it's inserted into a step/sidecar's `env:`
+    list (creating it if needed): the one under your cursor if there is
+    one, otherwise pick from a list of the Task's steps/sidecars.
 
 ## Why not a graphical editor?
 

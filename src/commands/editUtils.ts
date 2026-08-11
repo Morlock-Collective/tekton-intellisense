@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { atCursorText, blockAfterText } from "./snippetText";
+import { blockAfterText } from "./snippetText";
 
 /** Returns the leading whitespace of the line at `position`. */
 export function indentAt(document: vscode.TextDocument, position: vscode.Position): string {
@@ -19,11 +19,12 @@ export function toEnvVarName(name: string): string {
 }
 
 /**
- * Inserts `lines` starting exactly at `position` — the first line continues
- * whatever's already on that line (no indent added), and every line after
- * it starts fresh, prefixed with `indent`. Use this when `position` is
- * already sitting at the correct column (e.g. right after a `- ` you just
- * typed, or a cursor the caller has already indent-checked).
+ * Inserts `lines` as a new block on its own fresh line(s) after `position`
+ * — every line, including the first, is prefixed with `indent`. `position`
+ * is always AST-derived (end of the last list item, end of a map's last
+ * key, ...), never the cursor — every editing command resolves *where*
+ * something belongs from the document's structure, not where the cursor
+ * happens to be.
  *
  * Each entry in `lines` should carry only its *relative* indentation (e.g.
  * `"- name: x"` then `"  type: string"`, not the absolute column) — this
@@ -36,23 +37,6 @@ export function toEnvVarName(name: string): string {
  * live snippet syntax to `vscode.SnippetString`. Without escaping, a
  * description as ordinary as "cost is $5" would be silently reinterpreted
  * as a tabstop instead of inserted as written.
- */
-export async function insertAtCursor(
-  editor: vscode.TextEditor,
-  position: vscode.Position,
-  lines: string[],
-  indent: string
-): Promise<void> {
-  const snippet = new vscode.SnippetString().appendText(atCursorText(lines, indent));
-  await editor.insertSnippet(snippet, position);
-}
-
-/**
- * Inserts `lines` as a new block on its own fresh line(s) after `position`
- * — every line, including the first, is prefixed with `indent`. Use this
- * when appending after existing content (e.g. right after the last item in
- * a list, or the last key in a mapping) rather than at a cursor that's
- * already sitting on a blank/correctly-indented line.
  */
 export async function insertBlockAfter(
   editor: vscode.TextEditor,

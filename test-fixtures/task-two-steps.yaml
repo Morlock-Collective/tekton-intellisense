@@ -1,0 +1,18 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: multi-step
+spec:
+  params:
+    - name: target
+      type: string
+  steps:
+    - name: build
+      image: alpine
+      script: echo building
+    - name: push
+      image: alpine
+      env:
+        - name: EXISTING
+          value: already-here
+      script: echo pushing

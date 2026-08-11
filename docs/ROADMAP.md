@@ -446,11 +446,67 @@ for Task-result rename invoked from a Pipeline's `$(tasks.X.results.Y)`.
       regardless of ambiguity elsewhere; reference-resolved + unambiguous
       still succeeds normally.
 
+## Milestone 1.11 — AST-only targeting for the remaining editing commands (done)
+
+`addTask`, `addConditional`, and `bindParamToEnv` still resolved *where* to
+insert from the cursor. `addTask` had a genuine single well-defined target
+(like `addParameter`), so it got the exact same treatment. `addConditional`/
+`bindParamToEnv` are different in kind — "which task gets the `when:`" or
+"which step gets the env var" is inherently a choice among possibly many,
+which cursor position can't be eliminated from without losing information.
+The fix there wasn't removing cursor input, but making it precise (only
+match real task/step entries, never an incidentally similar-shaped nested
+map) and giving it a non-cursor fallback (a picker) instead of failing.
+
+- [x] **`model.ts`** gained the shared machinery: `resolveSpecOwner()` (one
+      implementation behind `resolveParamsTarget`, `resolvePipelineSpecOwner`,
+      and the new `resolveTaskSpecOwner` — Pipeline vs. PipelineRun-inline-
+      `pipelineSpec`, Task-like vs. TaskRun-inline-`taskSpec`, same shape
+      either way), `pipelineTaskEntryMaps`/`findEnclosingTaskEntry`, and
+      `stepAndSidecarEntryMaps`/`findEnclosingStepEntry`.
+- [x] **Bug found in the process**: the old `findEnclosingMap` (innermost
+      map at the cursor, checked only for *a* `name` key) would mistake a
+      task's own `params:` list item, or a step's own `env:` list item, for
+      the task/step entry itself — both incidentally have a `name` key too.
+      Cursor positioned there would silently corrupt the insert into the
+      wrong nested scope. The new helpers only ever match actual task/step
+      list entries, regardless of what's nested inside them.
+- [x] **`addTask.ts`**: fully cursor-independent now, via
+      `resolvePipelineSpecOwner` — and, as a side effect of routing through
+      it, gained support for adding a task to a PipelineRun's inline
+      `pipelineSpec`, which it didn't handle at all before.
+- [x] **`addConditional.ts`** / **`bindParamToEnv.ts`**: cursor position
+      inside a task/step entry is still the fast path, but when it's
+      outside one (or ambiguous), a `QuickPick` lists the actual task/step
+      entries by name and resolves directly against the chosen AST node —
+      never falls back to inserting "wherever the cursor happens to be."
+- [x] **Second bug found via the new end-to-end tests**: `addConditional`'s
+      indentation logic — unchanged by this task, just finally exercised —
+      used a fixed offset formula (`taskIndent` / `taskIndent + "  "`)
+      instead of matching the *existing* structure's own indentation.
+      Appending to an already-present `when:` list produced YAML the real
+      `yaml` parser rejects outright (`A block sequence may not be used as
+      an implicit map key`); creating a fresh `when:` landed it one
+      indentation level too shallow. Fixed to match `addTask`/
+      `addParameter`'s established pattern: derive indentation from the
+      actual existing structure (the list's own position) rather than
+      computing it by formula.
+- [x] `insertAtCursor`/`atCursorText` — the last remaining "insert wherever
+      the cursor is" primitives — are now dead code (nothing calls them,
+      since every command routes through AST-derived positions) and were
+      deleted.
+- [x] Verified via `test-fixtures/check.js`: container-detection precision
+      (cursor inside a nested params/env item resolves to the *enclosing*
+      task/step, not the item), `resolvePipelineSpecOwner`/
+      `resolveTaskSpecOwner` Run-inline-spec awareness, and full end-to-end
+      splice simulations for all three commands across both their
+      "append to existing" and "create fresh" branches — including the
+      regression case (append to an existing `when:`/`env:`) that caught
+      the indentation bug, re-parsed with the real `yaml` package rather
+      than just inspected.
+
 ## Next up
 
-- [ ] Extend the `resolveParamsTarget`-style AST-only targeting to
-      `addTask`/`addConditional`/`bindParamToEnv`, replacing their
-      cursor-based fallbacks the same way `addParameter` just was.
 - [ ] Validate task-level `workspaces[].workspace` bindings against
       `spec.workspaces` (Pipeline) — same misspelling-suggestion UX.
 - [ ] Cross-file "Find All References" from a Task's result declaration

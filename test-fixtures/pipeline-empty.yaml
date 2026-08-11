@@ -1,0 +1,8 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: fresh-pipeline
+spec:
+  params:
+    - name: deploy-env
+      type: string

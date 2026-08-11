@@ -1,13 +1,19 @@
 import * as vscode from "vscode";
-import { findEnclosingMap, parseTektonDocument, trimTrailingNewline } from "../tekton/model";
-import { indentAt, insertAtCursor, insertBlockAfter, toEnvVarName } from "./editUtils";
-import { isSeq } from "yaml";
+import { findEnclosingStepEntry, parseTektonDocument, stepAndSidecarEntryMaps, trimTrailingNewline } from "../tekton/model";
+import { indentAt, insertBlockAfter, toEnvVarName } from "./editUtils";
+import { isScalar, isSeq, YAMLMap } from "yaml";
+
+function stepEntryLabel(entry: YAMLMap, index: number): string {
+  const nameNode = entry.get("name", true);
+  return isScalar(nameNode) && typeof nameNode.value === "string" ? nameNode.value : `(step ${index + 1})`;
+}
 
 /**
- * Binds a declared pipeline/task parameter to a container `env:` entry at
- * the cursor. If the cursor is inside a step/sidecar that already has an
- * `env:` list, the entry is appended there; otherwise an `env:` list is
- * created at the same indentation as the container's other keys.
+ * Binds a declared parameter to a container `env:` entry. If the cursor is
+ * inside a step/sidecar, that's the target; otherwise (or if it's
+ * ambiguous which step the cursor is actually in) a picker resolves it
+ * directly against the document's step/sidecar entries rather than
+ * guessing from position.
  */
 export async function bindParamToEnvCommand(): Promise<void> {
   const editor = vscode.window.activeTextEditor;
@@ -39,32 +45,43 @@ export async function bindParamToEnvCommand(): Promise<void> {
   if (!envName) return;
 
   const offset = document.offsetAt(editor.selection.active);
-  const container = findEnclosingMap(parsed.doc, offset);
+  let container = findEnclosingStepEntry(parsed, offset);
 
-  if (container) {
-    const existingEnv = container.get("env", true);
-    if (isSeq(existingEnv)) {
-      // Append a new entry to the existing env sequence.
-      const lastItem = existingEnv.items[existingEnv.items.length - 1] as
-        | { range?: [number, number, number] }
-        | undefined;
-      const rawAnchor = lastItem?.range ? lastItem.range[1] : existingEnv.range?.[1];
-      if (rawAnchor !== undefined) {
-        const anchorOffset = trimTrailingNewline(parsed.text, rawAnchor);
-        const pos = document.positionAt(anchorOffset);
-        const indent = indentAt(document, document.positionAt(existingEnv.range![0]));
-        await insertBlockAfter(editor, pos, [`- name: ${envName}`, `  value: $(params.${picked})`], indent);
-        return;
-      }
+  if (!container) {
+    const entries = stepAndSidecarEntryMaps(parsed);
+    if (entries.length === 0) {
+      vscode.window.showWarningMessage("Tekton Aid: this document has no steps or sidecars to bind an env var into.");
+      return;
     }
+    const chosen = await vscode.window.showQuickPick(
+      entries.map((entry, i) => ({ label: stepEntryLabel(entry, i), entry })),
+      { placeHolder: "Which step/sidecar should get the environment variable?" }
+    );
+    if (!chosen) return;
+    container = chosen.entry;
   }
 
-  // No existing env: list found in the enclosing container — insert a fresh one at cursor.
-  const indent = indentAt(document, editor.selection.active);
-  await insertAtCursor(
+  if (!container.range) return;
+
+  const existingEnv = container.get("env", true);
+  if (isSeq(existingEnv) && existingEnv.range) {
+    const lastItem = existingEnv.items[existingEnv.items.length - 1] as
+      | { range?: [number, number, number] }
+      | undefined;
+    const rawAnchor = lastItem?.range ? lastItem.range[1] : existingEnv.range[1];
+    const anchorOffset = trimTrailingNewline(parsed.text, rawAnchor);
+    const indent = indentAt(document, document.positionAt(existingEnv.range[0]));
+    await insertBlockAfter(editor, document.positionAt(anchorOffset), [`- name: ${envName}`, `  value: $(params.${picked})`], indent);
+    return;
+  }
+
+  // No existing env: list in this step/sidecar — create it, appended after the entry's last existing key.
+  const indent = indentAt(document, document.positionAt(container.range[0]));
+  const anchorOffset = trimTrailingNewline(parsed.text, container.range[1]);
+  await insertBlockAfter(
     editor,
-    editor.selection.active,
-    ["env:", `  - name: ${envName}`, `    value: $(params.${picked})`],
-    indent
+    document.positionAt(anchorOffset),
+    ["env:", "  - name: " + envName, "    value: $(params." + picked + ")"],
+    indent + "  "
   );
 }

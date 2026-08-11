@@ -357,18 +357,61 @@ function namedKeyIndent(text: string, map: YAMLMap, name: string): string | unde
   return undefined;
 }
 
-export interface ParamsTarget {
-  /** the map that should directly contain a `params:` key */
+export interface SpecListOwner {
+  /** the map that should directly contain the list key (e.g. `tasks:`, `params:`) */
   ownerMap: YAMLMap;
-  /** offset marking the end of ownerMap's content — where a brand-new `params:` key should be appended */
+  /** offset marking the end of ownerMap's content — where a brand-new key should be appended */
   ownerMapEnd: number;
-  /** indentation a `params:` key itself should sit at within ownerMap */
+  /** indentation the list key itself should sit at within ownerMap */
   keyIndent: string;
-  /** Pipeline/Task/etc declare params (name+type+description+default); PipelineRun/TaskRun *provide* them (name+value) unless they embed an inline spec */
-  shape: "declaration" | "binding";
+}
+
+/**
+ * Figures out which map directly owns a spec-level list, independent of
+ * cursor position: either `spec` itself, for document kinds in `ownKinds`,
+ * or an inline nested spec (`pipelineSpec`/`taskSpec`) for a Run kind that
+ * embeds one — since an inline spec is a full definition in every way that
+ * matters here. Returns undefined when neither applies (e.g. a
+ * PipelineRun using `pipelineRef` rather than an inline `pipelineSpec`).
+ */
+function resolveSpecOwner(
+  parsed: ParsedTektonDoc,
+  ownKinds: ReadonlySet<TektonKind>,
+  inlineKeyFor: (kind: TektonKind) => string | undefined
+): SpecListOwner | undefined {
+  const { doc, text, symbols } = parsed;
+  const spec = findSpecMap(doc);
+  if (!spec?.range) return undefined;
+
+  const root = isMap(doc.contents) ? doc.contents : undefined;
+  const specKeyIndent = (root && namedKeyIndent(text, root, "spec")) ?? "";
+
+  if (ownKinds.has(symbols.kind)) {
+    const keyIndent = firstChildKeyIndent(text, spec) ?? specKeyIndent + "  ";
+    return { ownerMap: spec, ownerMapEnd: spec.range[1], keyIndent };
+  }
+
+  const inlineKey = inlineKeyFor(symbols.kind);
+  if (inlineKey) {
+    const inline = mapOf(spec.get(inlineKey, true));
+    if (inline?.range) {
+      const inlineKeyIndent = namedKeyIndent(text, spec, inlineKey) ?? specKeyIndent + "  ";
+      const keyIndent = firstChildKeyIndent(text, inline) ?? inlineKeyIndent + "  ";
+      return { ownerMap: inline, ownerMapEnd: inline.range[1], keyIndent };
+    }
+  }
+
+  return undefined;
 }
 
 const PARAM_DECLARING_KINDS: ReadonlySet<TektonKind> = new Set(["Pipeline", "Task", "ClusterTask", "StepAction"]);
+const RUN_INLINE_SPEC_KEY = (kind: TektonKind): string | undefined =>
+  kind === "PipelineRun" ? "pipelineSpec" : kind === "TaskRun" ? "taskSpec" : undefined;
+
+export interface ParamsTarget extends SpecListOwner {
+  /** Pipeline/Task/etc declare params (name+type+description+default); PipelineRun/TaskRun *provide* them (name+value) unless they embed an inline spec */
+  shape: "declaration" | "binding";
+}
 
 /**
  * Figures out where a new parameter belongs, independent of cursor
@@ -378,28 +421,81 @@ const PARAM_DECLARING_KINDS: ReadonlySet<TektonKind> = new Set(["Pipeline", "Tas
  * one inline via `pipelineSpec`/`taskSpec`.
  */
 export function resolveParamsTarget(parsed: ParsedTektonDoc): ParamsTarget | undefined {
-  const { doc, text, symbols } = parsed;
-  const spec = findSpecMap(doc);
-  if (!spec?.range) return undefined;
+  const declared = resolveSpecOwner(parsed, PARAM_DECLARING_KINDS, RUN_INLINE_SPEC_KEY);
+  if (declared) return { ...declared, shape: "declaration" };
 
-  const root = isMap(doc.contents) ? doc.contents : undefined;
-  const specKeyIndent = (root && namedKeyIndent(text, root, "spec")) ?? "";
+  // PipelineRun/TaskRun using ..Ref (no inline spec) — params are *provided* directly under spec.
+  const bound = resolveSpecOwner(parsed, new Set(["PipelineRun", "TaskRun"]), () => undefined);
+  return bound ? { ...bound, shape: "binding" } : undefined;
+}
 
-  if (PARAM_DECLARING_KINDS.has(symbols.kind)) {
-    const keyIndent = firstChildKeyIndent(text, spec) ?? specKeyIndent + "  ";
-    return { ownerMap: spec, ownerMapEnd: spec.range[1], keyIndent, shape: "declaration" };
+/**
+ * Figures out where Pipeline-level lists (`tasks`, `finally`) belong: a
+ * Pipeline's own spec, or a PipelineRun's inline `pipelineSpec`. Returns
+ * undefined for anything else (a PipelineRun using `pipelineRef` has no
+ * tasks list of its own to add to; neither does a Task-shaped document).
+ */
+export function resolvePipelineSpecOwner(parsed: ParsedTektonDoc): SpecListOwner | undefined {
+  return resolveSpecOwner(parsed, new Set(["Pipeline"]), (kind) => (kind === "PipelineRun" ? "pipelineSpec" : undefined));
+}
+
+/**
+ * Figures out where Task-level lists (`steps`, `sidecars`) belong: a
+ * Task/ClusterTask/StepAction's own spec, or a TaskRun's inline `taskSpec`.
+ */
+export function resolveTaskSpecOwner(parsed: ParsedTektonDoc): SpecListOwner | undefined {
+  return resolveSpecOwner(parsed, TASK_LIKE_KINDS, (kind) => (kind === "TaskRun" ? "taskSpec" : undefined));
+}
+
+/**
+ * Every `spec.tasks[]`/`spec.finally[]` entry as its raw YAMLMap node
+ * (Pipeline or PipelineRun-inline-pipelineSpec aware, via
+ * {@link resolvePipelineSpecOwner}). Unlike {@link findEnclosingMap}, which
+ * finds whatever map is innermost at an offset, this only ever returns
+ * actual task-list entries — a params-list item (`- name: x`) inside a
+ * task also has a `name` key and would otherwise be mistaken for one.
+ */
+export function pipelineTaskEntryMaps(parsed: ParsedTektonDoc): YAMLMap[] {
+  const owner = resolvePipelineSpecOwner(parsed);
+  if (!owner) return [];
+  const maps: YAMLMap[] = [];
+  for (const key of ["tasks", "finally"]) {
+    const seq = findSeqIn(owner.ownerMap, key);
+    if (!seq) continue;
+    for (const item of seq.items) {
+      if (isMap(item)) maps.push(item);
+    }
   }
+  return maps;
+}
 
-  const inlineKey = symbols.kind === "PipelineRun" ? "pipelineSpec" : symbols.kind === "TaskRun" ? "taskSpec" : undefined;
-  if (!inlineKey) return undefined;
+/** The `spec.tasks[]`/`spec.finally[]` entry enclosing `offset`, if any. */
+export function findEnclosingTaskEntry(parsed: ParsedTektonDoc, offset: number): YAMLMap | undefined {
+  return pipelineTaskEntryMaps(parsed).find((m) => m.range && offset >= m.range[0] && offset <= m.range[2]);
+}
 
-  const inline = mapOf(spec.get(inlineKey, true));
-  if (inline?.range) {
-    const inlineKeyIndent = namedKeyIndent(text, spec, inlineKey) ?? specKeyIndent + "  ";
-    const keyIndent = firstChildKeyIndent(text, inline) ?? inlineKeyIndent + "  ";
-    return { ownerMap: inline, ownerMapEnd: inline.range[1], keyIndent, shape: "declaration" };
+/**
+ * Every `spec.steps[]`/`spec.sidecars[]` entry as its raw YAMLMap node
+ * (Task/ClusterTask/StepAction or TaskRun-inline-taskSpec aware, via
+ * {@link resolveTaskSpecOwner}). Same precision concern as
+ * {@link pipelineTaskEntryMaps}: a step's own nested maps (`resources`,
+ * `env`, ...) shouldn't be mistaken for the step itself.
+ */
+export function stepAndSidecarEntryMaps(parsed: ParsedTektonDoc): YAMLMap[] {
+  const owner = resolveTaskSpecOwner(parsed);
+  if (!owner) return [];
+  const maps: YAMLMap[] = [];
+  for (const key of ["steps", "sidecars"]) {
+    const seq = findSeqIn(owner.ownerMap, key);
+    if (!seq) continue;
+    for (const item of seq.items) {
+      if (isMap(item)) maps.push(item);
+    }
   }
+  return maps;
+}
 
-  const keyIndent = firstChildKeyIndent(text, spec) ?? specKeyIndent + "  ";
-  return { ownerMap: spec, ownerMapEnd: spec.range[1], keyIndent, shape: "binding" };
+/** The `spec.steps[]`/`spec.sidecars[]` entry enclosing `offset`, if any. */
+export function findEnclosingStepEntry(parsed: ParsedTektonDoc, offset: number): YAMLMap | undefined {
+  return stepAndSidecarEntryMaps(parsed).find((m) => m.range && offset >= m.range[0] && offset <= m.range[2]);
 }
