@@ -99,6 +99,27 @@ ordering in the mapping.
       render, and it's picked up for free by anything else that reads
       symbols (completions already show it as item detail).
 
+## Milestone 1.4 — Definition + references providers (done)
+
+- [x] `src/tekton/definitions.ts`: "Go to Definition" on a `$(...)`
+      reference jumps to its declaring `name:` field. For
+      `$(tasks.X.results.Y)`, jumping from `X` goes to this Pipeline's own
+      `spec.tasks[]` entry; jumping from `Y` resolves cross-file through
+      `workspaceIndex` straight to the actual Task's `results[].name` —
+      even in a file that was never opened, since the index now keeps each
+      indexed Task's full parse (including its `yaml` `LineCounter`) rather
+      than just its symbol table, which is what lets an offset in that
+      file's source be turned into a precise `Range` without needing a
+      `TextDocument` for it.
+- [x] `src/tekton/references.ts`: "Find All References" from either a
+      declaration or a use collects every `$(...)` reference to that name
+      in the current document (plus the declaration itself, when VS Code's
+      `includeDeclaration` is set).
+- [x] `workspaceIndex.lookupTask()` kept its existing signature (still
+      returns just `TektonSymbols`, for completions/hover); added
+      `lookupTaskRecord()` alongside it returning `{ uri, parsed }` for the
+      cross-file Location math definitions needs.
+
 ## Known limitations (v0.1)
 
 - Task-level `workspaces: [{name, workspace: <pipeline-workspace-name>}]`
@@ -107,10 +128,14 @@ ordering in the mapping.
   expression) and needs its own check.
 - The workspace index resolves Tasks by `metadata.name`; a Helm-templated
   name (e.g. `{{ include "chart.fullname" . }}-build`) masks to a non-
-  matching placeholder, so cross-file result completion silently comes up
-  empty for such charts unless the taskRef itself is also a literal string.
-- No definition/references provider yet (e.g. jump from a `$(params.x)` ref
-  to its declaration).
+  matching placeholder, so cross-file result completion/definition silently
+  comes up empty for such charts unless the taskRef itself is also a
+  literal string — reasonable, since a templated name needs a templated
+  reference to match it anyway.
+- "Find All References" is scoped to the current document. Reverse lookup
+  ("which Pipelines use this Task's `digest` result") would need indexing
+  every Pipeline's `$(tasks.*.results.*)` usages, not just Task
+  declarations — a second index alongside `workspaceIndex`, not yet built.
 - No settings for custom Tekton API group/version allow-list (assumes any
   `tekton.dev/*`).
 
@@ -118,9 +143,8 @@ ordering in the mapping.
 
 - [ ] Validate task-level `workspaces[].workspace` bindings against
       `spec.workspaces` (Pipeline) — same misspelling-suggestion UX.
-- [ ] Definition/references provider for params/workspaces/results, and for
-      `$(tasks.X...)` → jump to the Task definition resolved via
-      `workspaceIndex`.
+- [ ] Cross-file "Find All References" from a Task's result declaration
+      back to every Pipeline task-result usage across the workspace.
 - [ ] Diagnostic + quick fix for tasks missing `runAfter` when they
       reference another task's result (implicit vs. explicit ordering).
 - [ ] Publish to the VS Code Marketplace / Open VSX.

@@ -43,6 +43,11 @@ file.
   declaration shows the resolved `taskRef` and that Task's actual results
   (cross-file, via the same workspace index completions use). Hovering
   `$(context.*)` shows what the built-in variable means.
+- **Go to Definition / Find All References** — jump from a `$(...)`
+  reference straight to its declaration; for `$(tasks.X.results.Y)`, `Y`
+  resolves cross-file to the actual Task's declared result, even in a file
+  you haven't opened. "Find All References" from a declaration or a use
+  collects every `$(...)` reference to it in the current document.
 - **Commands** (Command Palette or editor context menu):
   - `Tekton: Bind Parameter to Environment Variable` — pick a declared
     param, name the env var, and it's inserted into the `env:` list of the

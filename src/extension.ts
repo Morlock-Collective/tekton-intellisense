@@ -7,6 +7,8 @@ import { updateDecorations, clearDecorations, disposeDecorations } from "./tekto
 import { TektonWorkspaceIndex } from "./tekton/workspaceIndex";
 import { TektonRefCompletionProvider } from "./tekton/completions";
 import { TektonHoverProvider } from "./tekton/hover";
+import { TektonDefinitionProvider } from "./tekton/definitions";
+import { TektonReferenceProvider } from "./tekton/references";
 import { bindParamToEnvCommand } from "./commands/bindParamToEnv";
 import { addTaskCommand } from "./commands/addTask";
 import { addConditionalCommand } from "./commands/addConditional";
@@ -111,6 +113,17 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.languages.registerHoverProvider({ pattern: "**/*.{yaml,yml}" }, new TektonHoverProvider(workspaceIndex))
+  );
+
+  context.subscriptions.push(
+    vscode.languages.registerDefinitionProvider(
+      { pattern: "**/*.{yaml,yml}" },
+      new TektonDefinitionProvider(workspaceIndex)
+    )
+  );
+
+  context.subscriptions.push(
+    vscode.languages.registerReferenceProvider({ pattern: "**/*.{yaml,yml}" }, new TektonReferenceProvider())
   );
 
   context.subscriptions.push(

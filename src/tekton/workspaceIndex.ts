@@ -1,8 +1,13 @@
 import * as vscode from "vscode";
-import { parseTektonDocument, TASK_LIKE_KINDS, TektonSymbols } from "./model";
+import { parseTektonDocument, ParsedTektonDoc, TASK_LIKE_KINDS, TektonSymbols } from "./model";
 
 const YAML_GLOB = "**/*.{yaml,yml}";
 const EXCLUDE_GLOB = "**/{node_modules,.git}/**";
+
+export interface IndexedTask {
+  uri: vscode.Uri;
+  parsed: ParsedTektonDoc;
+}
 
 /**
  * A lightweight workspace-wide index of Task/ClusterTask/StepAction
@@ -18,7 +23,7 @@ const EXCLUDE_GLOB = "**/{node_modules,.git}/**";
  * watcher plus live re-indexing of open (possibly unsaved) documents.
  */
 export class TektonWorkspaceIndex implements vscode.Disposable {
-  private readonly byTaskName = new Map<string, TektonSymbols>();
+  private readonly byTaskName = new Map<string, IndexedTask>();
   private readonly taskNameByUri = new Map<string, string>();
   private readonly disposables: vscode.Disposable[] = [];
   private reindexTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -87,7 +92,7 @@ export class TektonWorkspaceIndex implements vscode.Disposable {
     const parsed = parseTektonDocument(text);
     if (!parsed || !TASK_LIKE_KINDS.has(parsed.symbols.kind) || !parsed.symbols.metadataName) return;
 
-    this.byTaskName.set(parsed.symbols.metadataName, parsed.symbols);
+    this.byTaskName.set(parsed.symbols.metadataName, { uri, parsed });
     this.taskNameByUri.set(key, parsed.symbols.metadataName);
   }
 
@@ -100,6 +105,11 @@ export class TektonWorkspaceIndex implements vscode.Disposable {
 
   /** Looks up a Task/ClusterTask/StepAction's declared symbols by its metadata.name (i.e. what a taskRef points at). */
   lookupTask(name: string): TektonSymbols | undefined {
+    return this.byTaskName.get(name)?.parsed.symbols;
+  }
+
+  /** Like {@link lookupTask}, but also returns the URI and full parse (incl. lineCounter) needed to build a cross-file Location. */
+  lookupTaskRecord(name: string): IndexedTask | undefined {
     return this.byTaskName.get(name);
   }
 
