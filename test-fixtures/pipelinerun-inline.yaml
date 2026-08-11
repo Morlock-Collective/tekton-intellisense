@@ -1,0 +1,10 @@
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  name: inline-run
+spec:
+  pipelineSpec:
+    tasks:
+      - name: build
+        taskRef:
+          name: build-image

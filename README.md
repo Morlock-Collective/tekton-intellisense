@@ -60,8 +60,14 @@ file.
     `spec.finally[]`) entry with a `taskRef`/`runAfter`/`params` skeleton.
   - `Tekton: Add When Expression to Task` — adds a `when:` condition to the
     `spec.tasks[]` entry under your cursor.
-  - `Tekton: Add Parameter` — appends a new `spec.params[]` entry, prompting
-    for name/type/default.
+  - `Tekton: Add Parameter` — always appends the new parameter last in the
+    correct list, regardless of cursor position, and is resource-aware:
+    Pipeline/Task/ClusterTask/StepAction get a declaration
+    (name/type/description/default) under `spec.params`; a PipelineRun/
+    TaskRun using a `..Ref` gets a value binding (name/value) instead,
+    unless it embeds an inline Pipeline/Task via `pipelineSpec`/`taskSpec`,
+    in which case it gets a declaration there instead. The other three
+    editing commands still take their cue from the cursor for now.
 
 ## Why not a graphical editor?
 

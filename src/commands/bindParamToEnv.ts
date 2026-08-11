@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
-import { findEnclosingMap, parseTektonDocument } from "../tekton/model";
-import { indentAt, insertIndentedSnippet, toEnvVarName } from "./editUtils";
+import { findEnclosingMap, parseTektonDocument, trimTrailingNewline } from "../tekton/model";
+import { indentAt, insertAtCursor, insertBlockAfter, toEnvVarName } from "./editUtils";
 import { isSeq } from "yaml";
 
 /**
@@ -47,16 +47,12 @@ export async function bindParamToEnvCommand(): Promise<void> {
       const lastItem = existingEnv.items[existingEnv.items.length - 1] as
         | { range?: [number, number, number] }
         | undefined;
-      const anchorOffset = lastItem?.range ? lastItem.range[1] : existingEnv.range?.[1];
-      if (anchorOffset !== undefined) {
+      const rawAnchor = lastItem?.range ? lastItem.range[1] : existingEnv.range?.[1];
+      if (rawAnchor !== undefined) {
+        const anchorOffset = trimTrailingNewline(parsed.text, rawAnchor);
         const pos = document.positionAt(anchorOffset);
         const indent = indentAt(document, document.positionAt(existingEnv.range![0]));
-        await insertIndentedSnippet(
-          editor,
-          pos,
-          `\n${indent}- name: ${envName}\n${indent}  value: $(params.${picked})`,
-          ""
-        );
+        await insertBlockAfter(editor, pos, [`- name: ${envName}`, `  value: $(params.${picked})`], indent);
         return;
       }
     }
@@ -64,10 +60,10 @@ export async function bindParamToEnvCommand(): Promise<void> {
 
   // No existing env: list found in the enclosing container — insert a fresh one at cursor.
   const indent = indentAt(document, editor.selection.active);
-  await insertIndentedSnippet(
+  await insertAtCursor(
     editor,
     editor.selection.active,
-    `env:\n  - name: ${envName}\n    value: $(params.${picked})\n`,
+    ["env:", `  - name: ${envName}`, `    value: $(params.${picked})`],
     indent
   );
 }

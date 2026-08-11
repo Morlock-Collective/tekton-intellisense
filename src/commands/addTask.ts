@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
-import { findSpecSeq, parseTektonDocument } from "../tekton/model";
-import { indentAt, insertIndentedSnippet } from "./editUtils";
+import { findSpecSeq, parseTektonDocument, trimTrailingNewline } from "../tekton/model";
+import { indentAt, insertAtCursor, insertBlockAfter } from "./editUtils";
 import { isSeq } from "yaml";
 
 /**
@@ -39,27 +39,20 @@ export async function addTaskCommand(): Promise<void> {
     placeHolder: "Add to spec.tasks or spec.finally?",
   })) ?? "tasks";
 
-  const template = [
-    `- name: ${taskName}`,
-    `  taskRef:`,
-    `    name: ${taskRef}`,
-    `  runAfter: []`,
-    `  params: []`,
-    ``,
-  ].join("\n");
+  const itemLines = [`- name: ${taskName}`, `  taskRef:`, `    name: ${taskRef}`, `  runAfter: []`, `  params: []`];
 
   const seq = findSpecSeq(parsed.doc, listKey);
 
   if (seq && isSeq(seq) && seq.range) {
     const lastItem = seq.items[seq.items.length - 1] as { range?: [number, number, number] } | undefined;
-    const anchorOffset = lastItem?.range ? lastItem.range[1] : seq.range[1];
+    const anchorOffset = trimTrailingNewline(parsed.text, lastItem?.range ? lastItem.range[1] : seq.range[1]);
     const pos = document.positionAt(anchorOffset);
     const seqIndent = indentAt(document, document.positionAt(seq.range[0]));
-    await insertIndentedSnippet(editor, pos, "\n" + seqIndent + template.trimEnd(), "");
+    await insertBlockAfter(editor, pos, itemLines, seqIndent);
     return;
   }
 
   // No spec.tasks/finally list yet — create one at the cursor's indentation.
   const indent = indentAt(document, editor.selection.active);
-  await insertIndentedSnippet(editor, editor.selection.active, `${listKey}:\n  ${template.trimEnd()}\n`, indent);
+  await insertAtCursor(editor, editor.selection.active, [`${listKey}:`, ...itemLines.map((l) => "  " + l)], indent);
 }

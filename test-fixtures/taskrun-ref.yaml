@@ -1,0 +1,10 @@
+apiVersion: tekton.dev/v1
+kind: TaskRun
+metadata:
+  name: build-run
+spec:
+  taskRef:
+    name: build-image
+  params:
+    - name: image
+      value: my-app

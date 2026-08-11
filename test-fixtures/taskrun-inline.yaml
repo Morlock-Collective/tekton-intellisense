@@ -1,0 +1,10 @@
+apiVersion: tekton.dev/v1
+kind: TaskRun
+metadata:
+  name: inline-build-run
+spec:
+  taskSpec:
+    steps:
+      - name: build
+        image: alpine
+        script: echo building

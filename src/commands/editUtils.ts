@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { atCursorText, blockAfterText } from "./snippetText";
 
 /** Returns the leading whitespace of the line at `position`. */
 export function indentAt(document: vscode.TextDocument, position: vscode.Position): string {
@@ -18,16 +19,38 @@ export function toEnvVarName(name: string): string {
 }
 
 /**
- * Inserts a multi-line LSP snippet template (may contain $1, ${1:default}, etc.)
- * at `position`, prefixing every line after the first with `indent` so the
- * result lines up with the surrounding YAML.
+ * Inserts `lines` starting exactly at `position` — the first line continues
+ * whatever's already on that line (no indent added), and every line after
+ * it starts fresh, prefixed with `indent`. Use this when `position` is
+ * already sitting at the correct column (e.g. right after a `- ` you just
+ * typed, or a cursor the caller has already indent-checked).
+ *
+ * Each entry in `lines` should carry only its *relative* indentation (e.g.
+ * `"- name: x"` then `"  type: string"`, not the absolute column) — this
+ * function adds `indent` uniformly so getting nesting right only requires
+ * getting the relative indents right once.
  */
-export async function insertIndentedSnippet(
+export async function insertAtCursor(
   editor: vscode.TextEditor,
   position: vscode.Position,
-  template: string,
+  lines: string[],
   indent: string
 ): Promise<void> {
-  const indented = template.split("\n").join("\n" + indent);
-  await editor.insertSnippet(new vscode.SnippetString(indented), position);
+  await editor.insertSnippet(new vscode.SnippetString(atCursorText(lines, indent)), position);
+}
+
+/**
+ * Inserts `lines` as a new block on its own fresh line(s) after `position`
+ * — every line, including the first, is prefixed with `indent`. Use this
+ * when appending after existing content (e.g. right after the last item in
+ * a list, or the last key in a mapping) rather than at a cursor that's
+ * already sitting on a blank/correctly-indented line.
+ */
+export async function insertBlockAfter(
+  editor: vscode.TextEditor,
+  position: vscode.Position,
+  lines: string[],
+  indent: string
+): Promise<void> {
+  await editor.insertSnippet(new vscode.SnippetString(blockAfterText(lines, indent)), position);
 }

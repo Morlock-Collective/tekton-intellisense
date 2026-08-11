@@ -134,6 +134,65 @@ ordering in the mapping.
       rejects outright at apply time, so there's no ambiguity about intent
       to preserve.
 
+## Milestone 1.6 — Contextual authoring, take one: Add Parameter (done)
+
+Fixed a real correctness bug in the editing commands, then used the fix to
+redesign `Add Parameter` around the document's AST instead of the cursor.
+
+- [x] **Bug**: multi-line inserts only applied the surrounding indent to the
+      *first* line of an embedded multi-line template — every line after it
+      kept only its own hardcoded relative indent, landing one nesting
+      level too shallow. Root-caused to `insertIndentedSnippet` being fed
+      pre-joined multi-line strings inline inside other template literals,
+      where only the outermost prefix got applied. Replaced it with two
+      unambiguous primitives in `src/commands/editUtils.ts` —
+      `insertAtCursor` (first line stays put, every line after gets
+      `indent`) and `insertBlockAfter` (every line, including the first,
+      gets `indent`) — backed by pure, Node-testable text composition in
+      `src/commands/snippetText.ts`. Every command that builds a multi-line
+      insert now passes an array of *relatively* indented lines instead of
+      a hand-spliced string, so getting the nesting right no longer depends
+      on manually keeping two indent computations in sync.
+- [x] **Bug** (found via the Node simulation added while fixing the above):
+      a YAML node's range sometimes already includes its own trailing
+      newline (observed on the last item in a block sequence) and
+      sometimes doesn't, depending on what follows in the source. Inserting
+      right at such an offset was therefore inconsistent — either gluing
+      the new content onto the very next line with no separator, or
+      duplicating the newline into a blank line. Fixed by
+      `model.ts#trimTrailingNewline`, applied at every AST-derived anchor
+      offset before inserting.
+- [x] **Cursor independence**: `Add Parameter` no longer looks at the
+      cursor at all. `model.ts#resolveParamsTarget` locates the correct
+      owning map from the document's kind and structure alone, then the
+      command always appends after the last existing entry (or creates the
+      key fresh, right after the owning map's last existing key) —
+      "added last in the list" now literally means last, regardless of
+      where the cursor happened to be.
+- [x] **Context sensitivity**: `resolveParamsTarget` distinguishes what an
+      "add parameter" even means per resource kind. Pipeline/Task/
+      ClusterTask/StepAction *declare* params (name/type/description/
+      default) directly under `spec`. PipelineRun/TaskRun normally
+      *provide* param values (name/value) under `spec` — but if they embed
+      an inline Pipeline/Task via `pipelineSpec`/`taskSpec` rather than a
+      `..Ref`, the command switches to declaration shape and targets the
+      inline spec's own `params`, since that's a Pipeline/Task definition
+      in every way that matters here.
+- [x] Verified with an end-to-end Node simulation
+      (`test-fixtures/check.js`) covering all seven shape/location
+      combinations — existing/fresh param list × Pipeline, Task,
+      PipelineRun (ref and inline), TaskRun (ref and inline) — each
+      re-parsed with the raw `yaml` package afterward to confirm the result
+      is valid YAML containing the new entry, not just eyeballed.
+
+The same two bug classes (indentation, trailing-newline anchors) were also
+present in `addTask.ts`, `addConditional.ts`, and `bindParamToEnv.ts` and
+got the same fix, but those three commands still resolve *where* to insert
+via the cursor (`findEnclosingMap` at the cursor offset) rather than a
+`resolveParamsTarget`-style AST-only rule — that redesign is scoped to Add
+Parameter for now; extending it to the others is natural follow-up work,
+not yet done.
+
 ## Known limitations (v0.1)
 
 - Task-level `workspaces: [{name, workspace: <pipeline-workspace-name>}]`
@@ -152,9 +211,23 @@ ordering in the mapping.
   declarations — a second index alongside `workspaceIndex`, not yet built.
 - No settings for custom Tekton API group/version allow-list (assumes any
   `tekton.dev/*`).
+- `Add Parameter` doesn't special-case an existing `params: []` (flow-style,
+  empty) list — it treats the list as present-but-empty and appends a
+  block-style item right after it, which produces a second, disconnected
+  `params:`-shaped block rather than converting the `[]` to block style.
+  Rare in practice (nothing else in this extension writes `params: []` for
+  `spec.params` itself — only `addTask`'s task-entry skeleton does, for a
+  different list), but worth fixing properly rather than leaving silently.
+- `addTask`/`addConditional`/`bindParamToEnv` got the same indentation and
+  trailing-newline-anchor bug fixes as `addParameter`, but still resolve
+  their insertion point from the cursor rather than the document's AST —
+  see Milestone 1.6 above.
 
 ## Next up
 
+- [ ] Extend the `resolveParamsTarget`-style AST-only targeting to
+      `addTask`/`addConditional`/`bindParamToEnv`, replacing their
+      cursor-based fallbacks the same way `addParameter` just was.
 - [ ] Validate task-level `workspaces[].workspace` bindings against
       `spec.workspaces` (Pipeline) — same misspelling-suggestion UX.
 - [ ] Cross-file "Find All References" from a Task's result declaration

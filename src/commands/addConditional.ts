@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
-import { findEnclosingMap, parseTektonDocument } from "../tekton/model";
-import { indentAt, insertIndentedSnippet } from "./editUtils";
+import { findEnclosingMap, parseTektonDocument, trimTrailingNewline } from "../tekton/model";
+import { indentAt, insertBlockAfter } from "./editUtils";
 import { isSeq } from "yaml";
 
 const OPERATORS = ["in", "notin"];
@@ -49,34 +49,26 @@ export async function addConditionalCommand(): Promise<void> {
     .map((v) => v.trim())
     .filter(Boolean);
 
-  const whenBlock = [
-    `when:`,
-    `  - input: "${inputExpr}"`,
-    `    operator: ${operator}`,
-    `    values: [${values.join(", ")}]`,
-  ].join("\n");
+  const itemLines = [`- input: "${inputExpr}"`, `  operator: ${operator}`, `  values: [${values.join(", ")}]`];
 
   const existingWhen = taskEntry.get("when", true);
-  const taskIndent = taskEntry.range ? indentAt(document, document.positionAt(taskEntry.range[0])) : indentAt(document, editor.selection.active);
+  const taskIndent = taskEntry.range
+    ? indentAt(document, document.positionAt(taskEntry.range[0]))
+    : indentAt(document, editor.selection.active);
 
   if (isSeq(existingWhen) && existingWhen.range) {
     const lastItem = existingWhen.items[existingWhen.items.length - 1] as
       | { range?: [number, number, number] }
       | undefined;
-    const anchorOffset = lastItem?.range ? lastItem.range[1] : existingWhen.range[1];
+    const anchorOffset = trimTrailingNewline(parsed.text, lastItem?.range ? lastItem.range[1] : existingWhen.range[1]);
     const pos = document.positionAt(anchorOffset);
-    await insertIndentedSnippet(
-      editor,
-      pos,
-      `\n${taskIndent}  - input: "${inputExpr}"\n${taskIndent}    operator: ${operator}\n${taskIndent}    values: [${values.join(", ")}]`,
-      ""
-    );
+    await insertBlockAfter(editor, pos, itemLines, taskIndent + "  ");
     return;
   }
 
   // No existing when: — insert after the task entry's `name:` line, at the task's indentation.
   const nameNode = taskEntry.get("name", true) as { range?: [number, number, number] } | undefined;
-  const anchorOffset = nameNode?.range ? nameNode.range[1] : taskEntry.range?.[0] ?? offset;
+  const anchorOffset = trimTrailingNewline(parsed.text, nameNode?.range ? nameNode.range[1] : taskEntry.range?.[0] ?? offset);
   const pos = document.positionAt(anchorOffset);
-  await insertIndentedSnippet(editor, pos, `\n${taskIndent}${whenBlock}`, "");
+  await insertBlockAfter(editor, pos, ["when:", ...itemLines.map((l) => "  " + l)], taskIndent);
 }

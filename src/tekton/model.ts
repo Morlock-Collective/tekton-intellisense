@@ -266,3 +266,94 @@ export function findSpecMap(doc: Document.Parsed): YAMLMap | undefined {
   const root = isMap(doc.contents) ? doc.contents : undefined;
   return root ? mapOf(root.get("spec", true)) : undefined;
 }
+
+/** Looks up a sequence directly under an arbitrary map (not necessarily spec) — e.g. an inline pipelineSpec/taskSpec's own `params`. */
+export function findSeqIn(map: YAMLMap, key: string): YAMLSeq | undefined {
+  return seqOf(map.get(key, true));
+}
+
+/** Indentation of the line containing `offset`, assuming `offset` marks the first non-whitespace column of that line (true for YAML key/scalar node ranges). */
+function indentAtOffset(text: string, offset: number): string {
+  const lineStart = text.lastIndexOf("\n", offset - 1) + 1;
+  return text.slice(lineStart, offset);
+}
+
+/**
+ * A YAML node's range sometimes extends past its own trailing newline (e.g.
+ * the last item in a block sequence) and sometimes doesn't, depending on
+ * what follows in the document. Appending new content right at such an
+ * offset is therefore unreliable — it can either swallow the separator
+ * newline (gluing the new content onto the next line) or duplicate it
+ * (leaving a blank line). Trimming any trailing newline(s) off first makes
+ * "insert right after this node" land consistently right after its last
+ * real character, letting whatever newline already follows in the source
+ * do its job unmolested.
+ */
+export function trimTrailingNewline(text: string, offset: number): number {
+  let o = offset;
+  while (o > 0 && (text[o - 1] === "\n" || text[o - 1] === "\r")) o--;
+  return o;
+}
+
+/** Indentation of a map's first key — a reliable stand-in for "how this map's children are indented" when adding a new sibling key. */
+function firstChildKeyIndent(text: string, map: YAMLMap): string | undefined {
+  const key = map.items[0]?.key;
+  return isScalar(key) && key.range ? indentAtOffset(text, key.range[0]) : undefined;
+}
+
+/** Indentation of a specific named key within a map, if present. */
+function namedKeyIndent(text: string, map: YAMLMap, name: string): string | undefined {
+  for (const pair of map.items) {
+    if (isScalar(pair.key) && pair.key.value === name && pair.key.range) {
+      return indentAtOffset(text, pair.key.range[0]);
+    }
+  }
+  return undefined;
+}
+
+export interface ParamsTarget {
+  /** the map that should directly contain a `params:` key */
+  ownerMap: YAMLMap;
+  /** offset marking the end of ownerMap's content — where a brand-new `params:` key should be appended */
+  ownerMapEnd: number;
+  /** indentation a `params:` key itself should sit at within ownerMap */
+  keyIndent: string;
+  /** Pipeline/Task/etc declare params (name+type+description+default); PipelineRun/TaskRun *provide* them (name+value) unless they embed an inline spec */
+  shape: "declaration" | "binding";
+}
+
+const PARAM_DECLARING_KINDS: ReadonlySet<TektonKind> = new Set(["Pipeline", "Task", "ClusterTask", "StepAction"]);
+
+/**
+ * Figures out where a new parameter belongs, independent of cursor
+ * position: Pipelines/Tasks declare params directly under spec; a
+ * PipelineRun/TaskRun either provides param *values* under spec (when using
+ * a `..Ref`) or declares params like a Pipeline/Task does, when it embeds
+ * one inline via `pipelineSpec`/`taskSpec`.
+ */
+export function resolveParamsTarget(parsed: ParsedTektonDoc): ParamsTarget | undefined {
+  const { doc, text, symbols } = parsed;
+  const spec = findSpecMap(doc);
+  if (!spec?.range) return undefined;
+
+  const root = isMap(doc.contents) ? doc.contents : undefined;
+  const specKeyIndent = (root && namedKeyIndent(text, root, "spec")) ?? "";
+
+  if (PARAM_DECLARING_KINDS.has(symbols.kind)) {
+    const keyIndent = firstChildKeyIndent(text, spec) ?? specKeyIndent + "  ";
+    return { ownerMap: spec, ownerMapEnd: spec.range[1], keyIndent, shape: "declaration" };
+  }
+
+  const inlineKey = symbols.kind === "PipelineRun" ? "pipelineSpec" : symbols.kind === "TaskRun" ? "taskSpec" : undefined;
+  if (!inlineKey) return undefined;
+
+  const inline = mapOf(spec.get(inlineKey, true));
+  if (inline?.range) {
+    const inlineKeyIndent = namedKeyIndent(text, spec, inlineKey) ?? specKeyIndent + "  ";
+    const keyIndent = firstChildKeyIndent(text, inline) ?? inlineKeyIndent + "  ";
+    return { ownerMap: inline, ownerMapEnd: inline.range[1], keyIndent, shape: "declaration" };
+  }
+
+  const keyIndent = firstChildKeyIndent(text, spec) ?? specKeyIndent + "  ";
+  return { ownerMap: spec, ownerMapEnd: spec.range[1], keyIndent, shape: "binding" };
+}

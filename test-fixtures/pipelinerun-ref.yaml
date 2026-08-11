@@ -1,0 +1,10 @@
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  name: build-and-deploy-run
+spec:
+  pipelineRef:
+    name: build-and-deploy
+  params:
+    - name: deploy-env
+      value: production
