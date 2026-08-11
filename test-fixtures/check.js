@@ -6,14 +6,34 @@ const { parseTektonDocument, resolveParamsTarget, findSeqIn, trimTrailingNewline
 const { findParamRefs } = require("../out/tekton/paramRefs");
 const { closestMatch } = require("../out/tekton/levenshtein");
 const { findDuplicateGroups } = require("../out/tekton/duplicates");
-const { blockAfterText } = require("../out/commands/snippetText");
+const { blockAfterText, quoteYamlString } = require("../out/commands/snippetText");
 const YAML = require("yaml");
 
-function check(file) {
+let failures = 0;
+
+console.log("quoteYamlString round-trip check:");
+for (const c of ['plain text', 'has "quotes" inside', "back\\slash", "colon: here", "cost is $5", "multi\nline", "tab\there"]) {
+  const line = "value: " + quoteYamlString(c);
+  let ok = false;
+  try {
+    ok = YAML.parse(line).value === c;
+  } catch {
+    ok = false;
+  }
+  if (!ok) {
+    console.log(`  [FAIL] quoteYamlString(${JSON.stringify(c)}) did not round-trip: ${line}`);
+    failures++;
+  }
+}
+console.log(failures === 0 ? "  [PASS] all cases round-tripped" : "  some cases failed, see above");
+
+/** Parses `file`, prints its symbol table, and asserts exactly `expectedWarnings` unknown-reference warnings are found. */
+function check(file, expectedWarnings) {
   const source = fs.readFileSync(path.join(__dirname, file), "utf8");
   const parsed = parseTektonDocument(source);
   if (!parsed) {
-    console.log(`${file}: NOT recognized as a Tekton document`);
+    console.log(`  [FAIL] ${file}: NOT recognized as a Tekton document`);
+    failures++;
     return;
   }
   console.log(`\n${file} -> kind=${parsed.symbols.kind} helmTemplated=${parsed.isHelmTemplated}`);
@@ -28,6 +48,7 @@ function check(file) {
     parsed.symbols.tasks.map((t) => t.name)
   );
 
+  let warningCount = 0;
   const refs = findParamRefs(parsed.text);
   for (const ref of refs) {
     let names;
@@ -38,19 +59,26 @@ function check(file) {
     else continue;
 
     if (ref.name && !names.includes(ref.name)) {
+      warningCount++;
       const suggestion = closestMatch(ref.name, names);
       console.log(
         `  [WARN] ${ref.kind} "${ref.name}" not declared.${suggestion ? ` Did you mean "${suggestion}"?` : ""}`
       );
     }
   }
+
+  if (warningCount !== expectedWarnings) {
+    console.log(`  [FAIL] ${file}: expected ${expectedWarnings} warning(s), found ${warningCount}`);
+    failures++;
+  }
 }
 
-check("pipeline-typo.yaml");
-check("helm-templated-task.yaml");
+check("pipeline-typo.yaml", 2);
+check("helm-templated-task.yaml", 1);
 
 console.log("\nduplicate-name check:");
 const dup = parseTektonDocument(fs.readFileSync(path.join(__dirname, "pipeline-duplicates.yaml"), "utf8"));
+let duplicatesFound = 0;
 for (const [list, label] of [
   [dup.symbols.params, "parameter"],
   [dup.symbols.workspaces, "workspace"],
@@ -58,8 +86,13 @@ for (const [list, label] of [
   [dup.symbols.tasks, "task"],
 ]) {
   for (const [name, occurrences] of findDuplicateGroups(list)) {
+    duplicatesFound++;
     console.log(`  [ERROR] duplicate ${label} name "${name}" — declared ${occurrences.length} times`);
   }
+}
+if (duplicatesFound !== 2) {
+  console.log(`  [FAIL] pipeline-duplicates.yaml: expected 2 duplicate groups (param + task), found ${duplicatesFound}`);
+  failures++;
 }
 
 // End-to-end "Add Parameter" simulation: reproduces addParameter.ts's own
@@ -104,6 +137,7 @@ function checkAddParameter(file, itemLines, expectedName) {
   const { target, result } = simulateAddParameter(source, itemLines);
   if (!target) {
     console.log(`  [FAIL] ${file}: resolveParamsTarget found no target`);
+    failures++;
     return;
   }
 
@@ -113,6 +147,7 @@ function checkAddParameter(file, itemLines, expectedName) {
   } catch (err) {
     console.log(`  [FAIL] ${file}: result is no longer valid YAML (${err.message})`);
     console.log(result);
+    failures++;
     return;
   }
 
@@ -123,7 +158,10 @@ function checkAddParameter(file, itemLines, expectedName) {
 
   const ok = hasNewParam && reasonableGrowth;
   console.log(`  [${ok ? "PASS" : "FAIL"}] ${file} (shape=${target.shape}): new param present=${hasNewParam}`);
-  if (!ok) console.log(result);
+  if (!ok) {
+    console.log(result);
+    failures++;
+  }
 }
 
 console.log("\nadd-parameter simulation (context-aware target + no cursor):");
@@ -134,6 +172,26 @@ checkAddParameter("pipelinerun-ref.yaml", ["- name: new-param", "  value: someth
 checkAddParameter("pipelinerun-inline.yaml", ["- name: new-param", "  type: string"], "new-param");
 checkAddParameter("taskrun-ref.yaml", ["- name: new-param", "  value: something"], "new-param");
 checkAddParameter("taskrun-inline.yaml", ["- name: new-param", "  type: string"], "new-param");
+
+// A blank line the user put there on purpose (between spec.params and the
+// next key) must survive appending a new param right before it — regression
+// test for trimTrailingNewline() over-trimming a whole run of newlines
+// instead of just the one that terminates the last item's own line.
+{
+  const file = "task-blank-line.yaml";
+  const source = fs.readFileSync(path.join(__dirname, file), "utf8");
+  const blankLinesBefore = (source.match(/\n\n/g) || []).length;
+  const { result } = simulateAddParameter(source, ["- name: new-param", "  type: string"]);
+  const blankLinesAfter = (result.match(/\n\n/g) || []).length;
+  const ok = blankLinesAfter === blankLinesBefore;
+  console.log(
+    `  [${ok ? "PASS" : "FAIL"}] ${file}: pre-existing blank line preserved (before=${blankLinesBefore}, after=${blankLinesAfter})`
+  );
+  if (!ok) {
+    console.log(result);
+    failures++;
+  }
+}
 
 // Cross-file completion resolution: tasks.<local>.results.<X> should resolve
 // against the Task that taskRef actually points at, in a *different* file.
@@ -147,3 +205,10 @@ console.log(
   `  tasks.build.taskRef=${localTask.taskRefName} -> results:`,
   resolved.results.map((r) => r.name)
 );
+if (!resolved || resolved.results.map((r) => r.name).join(",") !== "digest,image-url") {
+  console.log("  [FAIL] cross-file result resolution did not return the expected results");
+  failures++;
+}
+
+console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) FAILED.`);
+process.exit(failures === 0 ? 0 : 1);

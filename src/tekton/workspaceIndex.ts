@@ -23,7 +23,12 @@ export interface IndexedTask {
  * watcher plus live re-indexing of open (possibly unsaved) documents.
  */
 export class TektonWorkspaceIndex implements vscode.Disposable {
-  private readonly byTaskName = new Map<string, IndexedTask>();
+  // name -> (uri string -> indexed task). Keyed two levels deep rather than
+  // flat by name so that two different files declaring the same
+  // metadata.name (e.g. a vendored/catalog Task like "git-clone" present in
+  // more than one chart — not an edge case in practice) don't clobber each
+  // other: re-indexing or removing one file only ever touches its own entry.
+  private readonly byTaskName = new Map<string, Map<string, IndexedTask>>();
   private readonly taskNameByUri = new Map<string, string>();
   private readonly disposables: vscode.Disposable[] = [];
   private reindexTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -85,32 +90,54 @@ export class TektonWorkspaceIndex implements vscode.Disposable {
 
   private index(uri: vscode.Uri, text: string): void {
     const key = uri.toString();
-    const prevName = this.taskNameByUri.get(key);
-    if (prevName) this.byTaskName.delete(prevName);
-    this.taskNameByUri.delete(key);
+    this.removeFromNameIndex(key);
 
     const parsed = parseTektonDocument(text);
     if (!parsed || !TASK_LIKE_KINDS.has(parsed.symbols.kind) || !parsed.symbols.metadataName) return;
 
-    this.byTaskName.set(parsed.symbols.metadataName, { uri, parsed });
-    this.taskNameByUri.set(key, parsed.symbols.metadataName);
+    const name = parsed.symbols.metadataName;
+    let byUri = this.byTaskName.get(name);
+    if (!byUri) {
+      byUri = new Map();
+      this.byTaskName.set(name, byUri);
+    }
+    byUri.set(key, { uri, parsed });
+    this.taskNameByUri.set(key, name);
+  }
+
+  /** Removes whatever entry `uriKey` currently owns from byTaskName, without touching any other file's entry under the same name. */
+  private removeFromNameIndex(uriKey: string): void {
+    const prevName = this.taskNameByUri.get(uriKey);
+    if (!prevName) return;
+    const byUri = this.byTaskName.get(prevName);
+    if (byUri) {
+      byUri.delete(uriKey);
+      if (byUri.size === 0) this.byTaskName.delete(prevName);
+    }
+    this.taskNameByUri.delete(uriKey);
   }
 
   private remove(uri: vscode.Uri): void {
-    const key = uri.toString();
-    const prevName = this.taskNameByUri.get(key);
-    if (prevName) this.byTaskName.delete(prevName);
-    this.taskNameByUri.delete(key);
+    this.removeFromNameIndex(uri.toString());
   }
 
   /** Looks up a Task/ClusterTask/StepAction's declared symbols by its metadata.name (i.e. what a taskRef points at). */
   lookupTask(name: string): TektonSymbols | undefined {
-    return this.byTaskName.get(name)?.parsed.symbols;
+    return this.lookupTaskRecord(name)?.parsed.symbols;
   }
 
   /** Like {@link lookupTask}, but also returns the URI and full parse (incl. lineCounter) needed to build a cross-file Location. */
   lookupTaskRecord(name: string): IndexedTask | undefined {
-    return this.byTaskName.get(name);
+    const byUri = this.byTaskName.get(name);
+    if (!byUri || byUri.size === 0) return undefined;
+    // Multiple files can legitimately declare the same metadata.name (a
+    // vendored/catalog Task present in more than one chart). There's no
+    // "which file is the user in" context here to disambiguate by
+    // proximity, so pick deterministically by URI rather than by
+    // insertion order — otherwise which one "wins" would flip-flop on
+    // every unrelated edit depending on re-indexing order.
+    const firstKey = [...byUri.keys()].sort()[0];
+    return byUri.get(firstKey);
   }
 
   dispose(): void {

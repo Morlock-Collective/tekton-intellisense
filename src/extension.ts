@@ -18,6 +18,7 @@ const YAML_LIKE = /\.(ya?ml)$/i;
 
 let diagnosticCollection: vscode.DiagnosticCollection;
 let statusBar: TektonStatusBar;
+const refreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 function looksLikeYaml(document: vscode.TextDocument): boolean {
   // Rely on the file extension rather than languageId: other extensions (Helm,
@@ -56,15 +57,20 @@ export function activate(context: vscode.ExtensionContext): void {
   const workspaceIndex = new TektonWorkspaceIndex();
   context.subscriptions.push(diagnosticCollection, statusBar, workspaceIndex);
 
-  let debounce: ReturnType<typeof setTimeout> | undefined;
   const scheduleRefresh = (document: vscode.TextDocument) => {
-    if (debounce) clearTimeout(debounce);
-    debounce = setTimeout(() => {
-      refreshDiagnostics(document);
-      if (vscode.window.activeTextEditor?.document === document) {
-        refreshActiveEditorState(vscode.window.activeTextEditor);
-      }
-    }, 250);
+    const key = document.uri.toString();
+    const existing = refreshTimers.get(key);
+    if (existing) clearTimeout(existing);
+    refreshTimers.set(
+      key,
+      setTimeout(() => {
+        refreshTimers.delete(key);
+        refreshDiagnostics(document);
+        if (vscode.window.activeTextEditor?.document === document) {
+          refreshActiveEditorState(vscode.window.activeTextEditor);
+        }
+      }, 250)
+    );
   };
 
   refreshActiveEditorState(vscode.window.activeTextEditor);
@@ -135,6 +141,8 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 export function deactivate(): void {
+  for (const timer of refreshTimers.values()) clearTimeout(timer);
+  refreshTimers.clear();
   diagnosticCollection?.dispose();
   statusBar?.dispose();
   disposeDecorations();

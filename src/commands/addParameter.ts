@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { findSeqIn, parseTektonDocument, resolveParamsTarget, trimTrailingNewline } from "../tekton/model";
 import { insertBlockAfter, indentAt } from "./editUtils";
+import { quoteYamlString } from "./snippetText";
 
 const PARAM_TYPES = ["string", "array", "object"];
 
@@ -46,12 +47,12 @@ export async function addParameterCommand(): Promise<void> {
     const defaultValue = await vscode.window.showInputBox({ prompt: "Default value (leave blank for none)" });
 
     itemLines = [`- name: ${name}`, `  type: ${type}`];
-    if (description) itemLines.push(`  description: "${description}"`);
+    if (description) itemLines.push(`  description: ${quoteYamlString(description)}`);
     if (defaultValue) {
       if (type === "string") {
-        itemLines.push(`  default: "${defaultValue}"`);
+        itemLines.push(`  default: ${quoteYamlString(defaultValue)}`);
       } else if (type === "array") {
-        const items = defaultValue.split(",").map((v) => v.trim());
+        const items = defaultValue.split(",").map((v) => quoteYamlString(v.trim()));
         itemLines.push(`  default: [${items.join(", ")}]`);
       } else {
         itemLines.push(`  default: {}`);
@@ -60,7 +61,7 @@ export async function addParameterCommand(): Promise<void> {
   } else {
     const value = await vscode.window.showInputBox({ prompt: `Value for "${name}"` });
     if (value === undefined) return;
-    itemLines = [`- name: ${name}`, `  value: ${value}`];
+    itemLines = [`- name: ${name}`, `  value: ${quoteYamlString(value)}`];
   }
 
   const seq = findSeqIn(target.ownerMap, "params");

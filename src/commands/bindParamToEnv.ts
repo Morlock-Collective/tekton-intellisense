@@ -34,6 +34,7 @@ export async function bindParamToEnvCommand(): Promise<void> {
   const envName = await vscode.window.showInputBox({
     prompt: "Environment variable name",
     value: defaultEnvName,
+    validateInput: (v) => (/^[A-Za-z_][A-Za-z0-9_]*$/.test(v) ? undefined : "must be a valid environment variable name"),
   });
   if (!envName) return;
 

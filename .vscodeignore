@@ -4,5 +4,7 @@ src/**
 test-fixtures/**
 docs/**
 tsconfig.json
+eslint.config.js
+package-lock.json
 *.map
 .git/**

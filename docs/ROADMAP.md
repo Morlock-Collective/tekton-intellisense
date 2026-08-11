@@ -222,6 +222,89 @@ not yet done.
   trailing-newline-anchor bug fixes as `addParameter`, but still resolve
   their insertion point from the cursor rather than the document's AST —
   see Milestone 1.6 above.
+- `Add Parameter`'s binding shape (PipelineRun/TaskRun using a `..Ref`)
+  always emits the value as a quoted YAML string. A param declared with
+  `type: array` or `type: object` needs an array/object-shaped value, which
+  a single free-text prompt can't represent safely — quoting a string is
+  the correct behavior for the common case and doesn't regress anything
+  (the old, unquoted version couldn't represent array/object values
+  correctly either), but the UX doesn't yet ask for the param's declared
+  type to adapt the prompt.
+
+## Milestone 1.7 — Code review pass (done)
+
+Set up ESLint (`eslint.config.js`, flat config, `typescript-eslint`
+recommended + `no-floating-promises`/`eqeqeq`/`curly`) — clean on the
+existing codebase bar one intentional `== null` idiom, allowed via
+`eqeqeq`'s `null: "ignore"` option rather than rewritten awkwardly. Added
+`npm run lint` and fixed `npm test` (previously pointed at a
+`test/runTest.js` that was never implemented — an artifact of the initial
+scaffold nobody had run; now runs `test-fixtures/check.js`, and that script
+now actually exits non-zero on failure instead of only printing PASS/FAIL
+with no enforcement).
+
+Then a manual file-by-file review turned up several real bugs beyond
+anything already tracked as a documented limitation:
+
+- [x] **`helmMask.ts` could scramble line numbers.** A `{{ }}` action
+      spanning multiple lines (legal Go-template syntax — e.g. a multi-line
+      argument list) was replaced by a single-line run of `x` characters,
+      collapsing every line after it by however many newlines the action
+      contained. Every diagnostic/hover/decoration position past such an
+      action in a Helm-templated file would land on the wrong line. Fixed
+      by preserving embedded newlines in the replacement. Also deleted the
+      `if (len <= 2)` branch that duplicated its own `else` (the "different
+      handling" the docstring described had apparently never actually been
+      implemented) and the unused `looksLikeHelmTemplate` export.
+- [x] **`workspaceIndex.ts` let one file's edits delete another file's
+      entry.** The Task index was keyed flatly by `metadata.name`; two
+      files declaring the same name (a vendored/catalog Task like
+      `git-clone` present in more than one chart is a completely normal
+      occurrence, not a hypothetical) would silently overwrite each other,
+      and — worse — a momentarily-invalid edit to *either* file (e.g. mid-
+      keystroke) would wipe the *other* file's entry out of the index via
+      the shared name key, breaking `$(tasks.X.results.Y)` resolution for
+      a completely untouched file. Reproduced with a standalone script
+      before and after the fix. Fixed by keying two levels deep (name →
+      uri → record) so each file's entry can only ever be touched by edits
+      to that same file.
+- [x] **`extension.ts`'s diagnostic-refresh debounce was shared across all
+      documents.** A single `debounce` timer variable meant editing two
+      Tekton files within the same 250ms window silently dropped the
+      refresh for whichever one wasn't edited last — its diagnostics could
+      go stale until its next edit. Reproduced with a standalone timer
+      script. Fixed with a per-document timer map (same pattern
+      `workspaceIndex.ts` already used for its own reindex debouncing),
+      and pending timers are now cleared on `deactivate()`.
+- [x] **Editing commands didn't escape anything going into
+      `vscode.SnippetString`.** Free-text input (a parameter description, a
+      default value, a `when` expression) was spliced directly into
+      snippet text passed to the `SnippetString` constructor, which treats
+      `$1`, `${1:x}`, and `$NAME` as live tabstop/placeholder/variable
+      syntax — a description as ordinary as "cost is $5" would have been
+      silently reinterpreted instead of inserted literally. Fixed by
+      building every snippet via `SnippetString#appendText`, whose
+      documented contract is that the string is escaped, instead of the
+      constructor — one fix in `editUtils.ts` covers all four commands,
+      since they all funnel through `insertAtCursor`/`insertBlockAfter`.
+- [x] **Editing commands also didn't escape anything going into generated
+      YAML string scalars.** Separately from the snippet-syntax issue,
+      values embedded in double-quoted YAML strings (`description: "..."`,
+      `input: "..."`) weren't escaped for embedded `"` or `\`, and some
+      free-text values (`Add Parameter`'s binding-shape value, `when`
+      condition values) weren't quoted at all — either would produce
+      invalid or silently-wrong YAML for realistic input (a value
+      containing a colon, or pasted multi-line clipboard content, which
+      `showInputBox` accepts even though it only displays one line). Added
+      `snippetText.ts#quoteYamlString`, verified via round-trip through the
+      real `yaml` parser for a battery of tricky inputs (quotes,
+      backslashes, colons, `$`, embedded newlines, tabs), and applied it
+      everywhere a free-text value is inserted. Also added the same
+      Kubernetes-name `validateInput` that `addParameter`'s `name` field
+      and `addTask`'s `taskName` field already had to `addTask`'s `taskRef`
+      and `bindParamToEnv`'s `envName` — both are meant to be identifiers,
+      not free text, so validating them at the source is more correct than
+      merely escaping them.
 
 ## Next up
 

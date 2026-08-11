@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { findEnclosingMap, parseTektonDocument, trimTrailingNewline } from "../tekton/model";
 import { indentAt, insertBlockAfter } from "./editUtils";
+import { quoteYamlString } from "./snippetText";
 import { isSeq } from "yaml";
 
 const OPERATORS = ["in", "notin"];
@@ -49,7 +50,12 @@ export async function addConditionalCommand(): Promise<void> {
     .map((v) => v.trim())
     .filter(Boolean);
 
-  const itemLines = [`- input: "${inputExpr}"`, `  operator: ${operator}`, `  values: [${values.join(", ")}]`];
+  const quotedValues = values.map((v) => quoteYamlString(v));
+  const itemLines = [
+    `- input: ${quoteYamlString(inputExpr)}`,
+    `  operator: ${operator}`,
+    `  values: [${quotedValues.join(", ")}]`,
+  ];
 
   const existingWhen = taskEntry.get("when", true);
   const taskIndent = taskEntry.range

@@ -32,6 +32,7 @@ export async function addTaskCommand(): Promise<void> {
   const taskRef = await vscode.window.showInputBox({
     prompt: "taskRef name (Task this step runs)",
     value: taskName,
+    validateInput: (v) => (/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/.test(v) ? undefined : "must be a valid Kubernetes name"),
   });
   if (!taskRef) return;
 

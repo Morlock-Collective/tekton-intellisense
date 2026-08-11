@@ -17,28 +17,18 @@ export interface MaskResult {
 }
 
 /**
- * Replaces each {{ ... }} action with a placeholder of identical length.
- * Actions that look like they open a YAML mapping/sequence value (i.e. the
- * whole scalar is just the action) are replaced with a quoted empty-ish
- * placeholder so the surrounding YAML stays parseable; actions embedded
- * inside larger scalars (e.g. `image: {{ .Values.repo }}:{{ .Values.tag }}`)
- * are replaced with a run of `x` characters so string concatenation still
- * looks like a plain scalar.
+ * Replaces each {{ ... }} action with a same-length run of `x` characters,
+ * so the surrounding text still reads as a plain YAML scalar. Newlines
+ * *within* an action are preserved as-is rather than flattened — Go
+ * template actions are allowed to span multiple lines (e.g. a multi-line
+ * pipeline argument list), and collapsing them would shift every line
+ * number after the action, defeating the entire point of masking in place.
  */
 export function maskHelmTemplates(source: string): MaskResult {
   let masked = false;
   const text = source.replace(TEMPLATE_ACTION, (match) => {
     masked = true;
-    const len = match.length;
-    if (len <= 2) {
-      return "x".repeat(len);
-    }
-    return "x".repeat(len);
+    return match.replace(/[^\n\r]/g, "x");
   });
   return { text, masked };
-}
-
-/** Heuristic: does this file look like it contains Go-template syntax at all? */
-export function looksLikeHelmTemplate(source: string): boolean {
-  return TEMPLATE_ACTION.test(source);
 }

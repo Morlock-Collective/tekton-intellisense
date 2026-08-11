@@ -29,6 +29,13 @@ export function toEnvVarName(name: string): string {
  * `"- name: x"` then `"  type: string"`, not the absolute column) — this
  * function adds `indent` uniformly so getting nesting right only requires
  * getting the relative indents right once.
+ *
+ * Built via `SnippetString#appendText`, not the constructor, so the text is
+ * escaped as literal content — `lines` routinely embeds free-text user
+ * input (a description, a default value), and `$1`/`${1:x}`/`$NAME` are
+ * live snippet syntax to `vscode.SnippetString`. Without escaping, a
+ * description as ordinary as "cost is $5" would be silently reinterpreted
+ * as a tabstop instead of inserted as written.
  */
 export async function insertAtCursor(
   editor: vscode.TextEditor,
@@ -36,7 +43,8 @@ export async function insertAtCursor(
   lines: string[],
   indent: string
 ): Promise<void> {
-  await editor.insertSnippet(new vscode.SnippetString(atCursorText(lines, indent)), position);
+  const snippet = new vscode.SnippetString().appendText(atCursorText(lines, indent));
+  await editor.insertSnippet(snippet, position);
 }
 
 /**
@@ -52,5 +60,6 @@ export async function insertBlockAfter(
   lines: string[],
   indent: string
 ): Promise<void> {
-  await editor.insertSnippet(new vscode.SnippetString(blockAfterText(lines, indent)), position);
+  const snippet = new vscode.SnippetString().appendText(blockAfterText(lines, indent));
+  await editor.insertSnippet(snippet, position);
 }

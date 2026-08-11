@@ -6,14 +6,7 @@
 // $( ... ) where the body is dots/word-chars/hyphens/brackets/stars, no nested parens.
 const REF_PATTERN = /\$\(([a-zA-Z0-9_.\-\[\]*]+)\)/g;
 
-export type RefKind =
-  | "param"
-  | "workspace"
-  | "result"
-  | "task-result"
-  | "context"
-  | "resource"
-  | "unknown";
+export type RefKind = "param" | "workspace" | "result" | "task-result" | "context" | "unknown";
 
 export interface ParamRef {
   /** full match, e.g. "$(params.foo)" */

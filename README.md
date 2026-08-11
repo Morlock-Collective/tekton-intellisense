@@ -87,11 +87,15 @@ npm run compile      # or: npm run watch
 Then open this folder in VS Code and press F5 to launch an Extension
 Development Host. There's no `vscode` API dependency in the core parsing
 logic (`src/tekton/model.ts`, `paramRefs.ts`, `levenshtein.ts`,
-`helmMask.ts`), so it can be sanity-checked directly with Node — see
-`test-fixtures/check.js`:
+`helmMask.ts`, `duplicates.ts`, `commands/snippetText.ts`), so it can be
+sanity-checked directly with Node — see `test-fixtures/check.js`, which
+also end-to-end-simulates each editing command's output and round-trips it
+through the real `yaml` parser rather than relying on eyeballing the
+editor:
 
 ```bash
-npm run compile && node test-fixtures/check.js
+npm run lint    # eslint
+npm test        # compiles, then runs test-fixtures/check.js (exits non-zero on failure)
 ```
 
 ## Status

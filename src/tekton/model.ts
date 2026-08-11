@@ -164,8 +164,7 @@ function taskEntries(seq: YAMLSeq | undefined): TaskSymbol[] {
  * unnecessary work on unrelated YAML files.
  */
 export function parseTektonDocument(source: string): ParsedTektonDoc | undefined {
-  const { text } = maskHelmTemplates(source);
-  const isHelmTemplated = text !== source;
+  const { text, masked: isHelmTemplated } = maskHelmTemplates(source);
 
   const lineCounter = new LineCounter();
   let doc: Document.Parsed;
@@ -284,15 +283,23 @@ function indentAtOffset(text: string, offset: number): string {
  * what follows in the document. Appending new content right at such an
  * offset is therefore unreliable — it can either swallow the separator
  * newline (gluing the new content onto the next line) or duplicate it
- * (leaving a blank line). Trimming any trailing newline(s) off first makes
+ * (leaving a blank line). Trimming the trailing newline off first makes
  * "insert right after this node" land consistently right after its last
  * real character, letting whatever newline already follows in the source
  * do its job unmolested.
+ *
+ * Trims at most one line ending (a lone `\n`, or a `\r\n` pair treated as a
+ * unit) — not a whole run of them. A node's range can only ever have
+ * swallowed the *one* newline that terminates its own last line; anything
+ * beyond that is a blank line the user put there on purpose, and should be
+ * left alone rather than silently eaten.
  */
 export function trimTrailingNewline(text: string, offset: number): number {
-  let o = offset;
-  while (o > 0 && (text[o - 1] === "\n" || text[o - 1] === "\r")) o--;
-  return o;
+  if (offset > 0 && text[offset - 1] === "\n") {
+    offset--;
+    if (offset > 0 && text[offset - 1] === "\r") offset--;
+  }
+  return offset;
 }
 
 /** Indentation of a map's first key — a reliable stand-in for "how this map's children are indented" when adding a new sibling key. */
