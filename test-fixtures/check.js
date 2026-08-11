@@ -17,6 +17,7 @@ const {
 const { findParamRefs } = require("../out/tekton/paramRefs");
 const { closestMatch } = require("../out/tekton/levenshtein");
 const { findDuplicateGroups } = require("../out/tekton/duplicates");
+const { findMissingRunAfter } = require("../out/tekton/runAfterCheck");
 const { blockAfterText, quoteYamlString } = require("../out/commands/snippetText");
 const {
   resolveRenameTarget,
@@ -802,6 +803,94 @@ console.log("\nFind All References: cross-file pipeline identity (pipelineRef.na
   const ok = refs.length === 1;
   console.log(`  [${ok ? "PASS" : "FAIL"}] found the PipelineRun's pipelineRef.name (${refs.length} match(es))`);
   if (!ok) failures++;
+}
+
+// --- Missing runAfter: detection + quick fix ---
+
+console.log("\nmissing-runAfter detection:");
+{
+  const source = fs.readFileSync(path.join(__dirname, "pipeline-missing-runafter.yaml"), "utf8");
+  const parsed = parseTektonDocument(source);
+  const found = findMissingRunAfter(parsed);
+  console.log("  found:", found.map((f) => `${f.taskName} -> ${f.missingTaskRef}`));
+
+  const ok =
+    found.length === 2 &&
+    found.some((f) => f.taskName === "deploy" && f.missingTaskRef === "build") &&
+    found.some((f) => f.taskName === "audit" && f.missingTaskRef === "deploy") &&
+    // "notify" has runAfter but references no task result — must NOT be flagged.
+    !found.some((f) => f.taskName === "notify") &&
+    // "audit" already lists "build" in runAfter (and references it) — must NOT be (re-)flagged for build.
+    !found.some((f) => f.taskName === "audit" && f.missingTaskRef === "build");
+  console.log(`  [${ok ? "PASS" : "FAIL"}] flags "deploy"->build (fresh runAfter case) and "audit"->deploy (append case) only`);
+  if (!ok) failures++;
+}
+
+/** Mirrors codeActions.ts's addRunAfterFix logic exactly (minus the vscode.CodeAction wrapper). */
+function simulateAddRunAfter(source, taskName, missingTaskRef) {
+  const parsed = parseTektonDocument(source);
+  const taskEntry = pipelineTaskEntryMaps(parsed).find((m) => m.get("name") === taskName);
+  if (!taskEntry?.range) return { taskEntry: undefined };
+
+  const runAfterNode = taskEntry.get("runAfter", true);
+  let text, offset;
+  if (runAfterNode && runAfterNode.range && Array.isArray(runAfterNode.items)) {
+    const lastItem = runAfterNode.items[runAfterNode.items.length - 1];
+    const rawAnchor = lastItem?.range ? lastItem.range[1] : runAfterNode.range[1];
+    offset = trimTrailingNewline(parsed.text, rawAnchor);
+    const itemIndent = indentAtOffset(parsed.text, runAfterNode.range[0]);
+    text = blockAfterText([`- ${missingTaskRef}`], itemIndent);
+  } else {
+    offset = trimTrailingNewline(parsed.text, taskEntry.range[1]);
+    const taskIndent = indentAtOffset(parsed.text, taskEntry.range[0]);
+    text = blockAfterText(["runAfter:", `  - ${missingTaskRef}`], taskIndent + "  ");
+  }
+  return { taskEntry, result: source.slice(0, offset) + text + source.slice(offset) };
+}
+
+console.log("\nmissing-runAfter quick fix simulation:");
+{
+  const source = fs.readFileSync(path.join(__dirname, "pipeline-missing-runafter.yaml"), "utf8");
+
+  // "deploy" has no runAfter yet — must create it.
+  {
+    const { taskEntry, result } = simulateAddRunAfter(source, "deploy", "build");
+    let after, ok;
+    try {
+      after = YAML.parse(result);
+      const deployTask = after.spec.tasks.find((t) => t.name === "deploy");
+      ok = taskEntry !== undefined && Array.isArray(deployTask?.runAfter) && deployTask.runAfter.includes("build");
+    } catch {
+      ok = false;
+    }
+    console.log(`  [${ok ? "PASS" : "FAIL"}] "deploy": fresh runAfter: [build] created`);
+    if (!ok) {
+      console.log(result);
+      failures++;
+    }
+  }
+
+  // "audit" already has runAfter: [build] — must append "deploy", not clobber "build".
+  {
+    const { taskEntry, result } = simulateAddRunAfter(source, "audit", "deploy");
+    let after, ok;
+    try {
+      after = YAML.parse(result);
+      const auditTask = after.spec.tasks.find((t) => t.name === "audit");
+      ok =
+        taskEntry !== undefined &&
+        auditTask?.runAfter?.length === 2 &&
+        auditTask.runAfter.includes("build") &&
+        auditTask.runAfter.includes("deploy");
+    } catch {
+      ok = false;
+    }
+    console.log(`  [${ok ? "PASS" : "FAIL"}] "audit": appended "deploy" to existing runAfter: [build]`);
+    if (!ok) {
+      console.log(result);
+      failures++;
+    }
+  }
 }
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) FAILED.`);

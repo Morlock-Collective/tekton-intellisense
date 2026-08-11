@@ -1,0 +1,30 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: build-and-deploy-3
+spec:
+  tasks:
+    - name: build
+      taskRef:
+        name: build-image
+    - name: deploy
+      taskRef:
+        name: deploy-app
+      params:
+        - name: image-digest
+          value: $(tasks.build.results.digest)
+    - name: notify
+      taskRef:
+        name: notify-app
+      runAfter:
+        - deploy
+    - name: audit
+      taskRef:
+        name: audit-app
+      runAfter:
+        - build
+      params:
+        - name: image-digest
+          value: $(tasks.build.results.digest)
+        - name: deploy-status
+          value: $(tasks.deploy.results.status)

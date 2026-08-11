@@ -1,8 +1,9 @@
 import * as vscode from "vscode";
-import { NamedSymbol, parseTektonDocument, TektonSymbols } from "./model";
+import { NamedSymbol, ParsedTektonDoc, parseTektonDocument, TektonSymbols } from "./model";
 import { findParamRefs, ParamRef } from "./paramRefs";
 import { closestMatch } from "./levenshtein";
 import { findDuplicateGroups } from "./duplicates";
+import { findMissingRunAfter } from "./runAfterCheck";
 
 export const DIAGNOSTIC_SOURCE = "tekton-aid";
 
@@ -79,6 +80,29 @@ function checkTaskWorkspaceBindings(document: vscode.TextDocument, symbols: Tekt
   }
 
   return diagnostics;
+}
+
+/**
+ * Surfaces {@link findMissingRunAfter} as Information-severity diagnostics
+ * — deliberately not Warning/Error, since Tekton executes these correctly
+ * either way; this is a readability suggestion, not a defect. Carries a
+ * quick fix (`codeActions.ts`) that adds the missing entry.
+ */
+function checkMissingRunAfter(document: vscode.TextDocument, parsed: ParsedTektonDoc): vscode.Diagnostic[] {
+  return findMissingRunAfter(parsed).map(({ taskName, taskNameRange, missingTaskRef }) => {
+    const range = new vscode.Range(
+      offsetToPosition(document, taskNameRange[0]),
+      offsetToPosition(document, taskNameRange[1])
+    );
+    const diagnostic = new vscode.Diagnostic(
+      range,
+      `Task "${taskName}" references $(tasks.${missingTaskRef}.results...) but doesn't list "${missingTaskRef}" in runAfter. Tekton infers the run order from that reference either way — adding it just makes the ordering explicit.`,
+      vscode.DiagnosticSeverity.Information
+    );
+    diagnostic.source = DIAGNOSTIC_SOURCE;
+    diagnostic.code = `add-runafter:${missingTaskRef}`;
+    return diagnostic;
+  });
 }
 
 function checkRef(
@@ -162,6 +186,7 @@ export function computeDiagnostics(document: vscode.TextDocument): vscode.Diagno
     ...checkDuplicateNames(document, parsed.symbols.results, "result"),
     ...checkDuplicateNames(document, parsed.symbols.tasks, "task"),
     ...checkTaskWorkspaceBindings(document, parsed.symbols),
+    ...checkMissingRunAfter(document, parsed),
   ];
 
   const refs = findParamRefs(parsed.text);

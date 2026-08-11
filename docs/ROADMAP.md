@@ -561,8 +561,59 @@ not a broken file.
       cross-file task-identity (both the Pipeline-task-entry and TaskRun's
       own `taskRef` shapes) and pipeline-identity references.
 
+## Milestone 1.14 — Missing-runAfter diagnostic + quick fix (done)
+
+Tekton infers a task's run order automatically from any
+`$(tasks.X.results.Y)` reference within it — `runAfter` isn't required for
+*correctness*. So this isn't a bug-finder like the other diagnostics; it's
+a readability suggestion for the (very real) case where the ordering is
+only visible by cross-referencing every param value against every other
+task, rather than being written down where a reader would look first.
+Surfaced at `Information` severity, not `Warning`/`Error`, to keep that
+distinction honest — nothing here claims the pipeline is wrong.
+
+- [x] `src/tekton/runAfterCheck.ts`: pure (`vscode`-free) `findMissingRunAfter()`
+      — for each pipeline task, collects every `$(tasks.X.results.Y)`
+      reference within that task's own subtree (reusing
+      `findEnclosingTaskEntry` from Milestone 1.11 to scope the search
+      correctly), and flags any `X` not already listed in that task's own
+      `runAfter`. Skips unknown task names (the existing "unknown task"
+      diagnostic already owns that) and tasks with `runAfter` but no result
+      reference (a completely normal pattern — sequencing without data
+      flow — not a gap in anything).
+- [x] `diagnostics.ts#checkMissingRunAfter` surfaces it as an `Information`
+      diagnostic with `code: "add-runafter:<name>"`.
+- [x] `codeActions.ts` extended beyond its previous single-purpose
+      `suggest:` handling to a small dispatch on the diagnostic's code
+      prefix, adding an "Add \"X\" to runAfter" quick fix — appends to an
+      existing `runAfter:` list or creates one fresh, following the exact
+      same indentation-matches-existing-structure discipline established
+      in Milestone 1.11 (and initially got wrong here too, the same way,
+      before the tests caught it — see below).
+- [x] **Bug caught before it shipped, by the process rather than luck**:
+      the fix's "create fresh `runAfter:`" branch initially reused
+      `model.ts`'s internal offset-based indent helper, which assumes an
+      offset is preceded by pure whitespace — true for a YAML *key*'s own
+      range or a sequence's range (starts at its `-`), but **not** true for
+      a list-item *map*'s range (starts past the `- ` marker, on its first
+      key) — exactly the distinction Milestone 1.11 had already
+      established the hard way. Reusing it here would have reintroduced
+      the identical "- " -in-indent bug in a new location. Caught by
+      inspection before running the test, not by the test itself — a
+      reminder that the earlier fix's *lesson* (which offset shapes need
+      which indent strategy) has to be re-applied deliberately each time,
+      not just trusted to a helper's name. Fixed by using the same
+      regex-stripping `indentAt()` (`commands/editUtils.ts`, vscode-based)
+      the already-correct commands use, and narrowed `model.ts`'s own
+      helper back to non-exported with a doc comment spelling out exactly
+      which offset shapes it is and isn't safe for.
+- [x] Verified via `test-fixtures/check.js`: detection across a fixture
+      with all three shapes at once (missing entirely, already present,
+      present-but-for-a-different-task) in one Pipeline, and full
+      quick-fix splice simulations for both the fresh-list and
+      append-to-existing-list branches, re-parsed with the real `yaml`
+      package.
+
 ## Next up
 
-- [ ] Diagnostic + quick fix for tasks missing `runAfter` when they
-      reference another task's result (implicit vs. explicit ordering).
 - [ ] Publish to the VS Code Marketplace / Open VSX.

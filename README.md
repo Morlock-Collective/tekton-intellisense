@@ -35,6 +35,13 @@ file.
   treatment as `$(...)` references when `workspace:` doesn't match any of
   the Pipeline's declared `spec.workspaces[]` — a plain field value, not
   template syntax, but the same typo-invisible-until-runtime failure mode.
+- **Missing-`runAfter` hint** — a task referencing another task's result
+  via `$(tasks.X.results.Y)` gets its ordering inferred automatically by
+  Tekton either way, so this is an `Information`-level suggestion, not a
+  warning: if `X` isn't also listed in that task's own `runAfter`, a quick
+  fix adds it, making a dependency that's otherwise only visible by
+  cross-referencing param values explicit in the one place a reader would
+  look first.
 - **Context-aware completion** — typing `$(params.` (or `workspaces.`,
   `results.`, `tasks.`, `context.`) suggests exactly what's valid there:
   declared names for the current document, filtered by resource kind (no

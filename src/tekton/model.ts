@@ -331,7 +331,15 @@ export function findSeqIn(map: YAMLMap, key: string): YAMLSeq | undefined {
   return seqOf(map.get(key, true));
 }
 
-/** Indentation of the line containing `offset`, assuming `offset` marks the first non-whitespace column of that line (true for YAML key/scalar node ranges). */
+/**
+ * Indentation of the line containing `offset`, assuming `offset` marks the
+ * first non-whitespace column of that line. True for a YAML *key*'s own
+ * range, or a sequence's range (which starts at its first item's `-`) —
+ * NOT true for a list-item *map*'s range, which starts past the `- `
+ * marker, on its first key; callers with one of those need to strip to
+ * whitespace-only instead (see `commands/editUtils.ts#indentAt`, which
+ * does, via `vscode.TextDocument.lineAt`).
+ */
 function indentAtOffset(text: string, offset: number): string {
   const lineStart = text.lastIndexOf("\n", offset - 1) + 1;
   return text.slice(lineStart, offset);
