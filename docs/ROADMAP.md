@@ -364,6 +364,55 @@ anything already tracked as a documented limitation:
       ambiguity guard depends on (two fixture Task files genuinely sharing
       a `metadata.name`).
 
+## Milestone 1.9 — Track pipelineRef, close the identity-rename symmetry (done)
+
+Milestone 1.8 explicitly deferred Pipeline-identity rename because
+`pipelineRef.name` wasn't tracked as a symbol at all. Closed that gap, and
+along with it a matching gap on the Task side: `TaskRun.spec.taskRef.name`
+(a single top-level field) wasn't tracked either — only a *Pipeline's*
+per-task-entry `taskRef.name` was. Both are structurally identical "this
+document points at another resource by name" fields, so both got the same
+treatment in one pass rather than leaving the second half-done:
+
+- [x] `model.ts`: `TektonSymbols` gained `pipelineRefName`/
+      `pipelineRefNameRange` (populated for `PipelineRun`) and
+      `taskRefName`/`taskRefNameRange` (populated for `TaskRun`) —
+      deliberately named to collide with, but stay distinct from,
+      `TaskSymbol.taskRefName` (which is per pipeline-task-list-entry);
+      access is always through either `symbols.taskRefName` or
+      `taskEntry.taskRefName`, never ambiguous at the call site. Extracted
+      via a new shared `refNameAndRange()` helper, which also simplified
+      the existing per-task-entry `taskRef` extraction.
+- [x] `renameTarget.ts`: new `"pipeline-identity"` target kind, detected on
+      a Pipeline's own `metadata.name` and on a PipelineRun's
+      `pipelineRef.name` alike. `taskRefIdentityEdits()` now also matches a
+      TaskRun's own top-level `taskRef` (previously only Pipeline
+      task-entries); new `pipelineRefIdentityEdits()` mirrors it for
+      PipelineRuns.
+- [x] `workspaceIndex.ts`: generalized from a Task-only index to a
+      `NameIndex` type reused for both Tasks and Pipelines
+      (`byTaskName`/`byPipelineName`, kept as two separate maps — a Task
+      and a Pipeline coincidentally sharing a name isn't actually
+      ambiguous, since `taskRef` and `pipelineRef` resolve independently,
+      and merging them would invent a collision that doesn't exist). Added
+      `lookupPipeline`/`lookupPipelineRecord`/`lookupAllPipelineRecords`,
+      symmetric with the existing Task lookups. `IndexedTask` renamed to
+      `IndexedResource` now that it's not Task-specific.
+- [x] `rename.ts`: added the `"pipeline-identity"` case (rename a
+      Pipeline's `metadata.name`, update every `pipelineRef.name` across
+      the workspace, with the same ambiguity guard as the Task-identity
+      case). Generalized `findPipelineFiles()` into `findWorkspaceDocs(kinds)`
+      so the Task-identity case's cross-file scan could be extended to
+      cover `TaskRun` files too, not just Pipelines' per-task `taskRef`
+      entries — a TaskRun's own `taskRef` is exactly as real a reference as
+      a Pipeline task's.
+- [x] Verified via `test-fixtures/check.js`: renaming a Pipeline from a
+      PipelineRun's `pipelineRef.name` (not the declaration) updates both
+      files correctly, and `taskrun-ref.yaml`'s own top-level `taskRef`
+      renames correctly (a structurally distinct code path from the
+      existing Pipeline-task-entry `taskRef` case, so it needed its own
+      test, not just reuse of the existing one).
+
 ## Next up
 
 - [ ] Extend the `resolveParamsTarget`-style AST-only targeting to
@@ -372,14 +421,10 @@ anything already tracked as a documented limitation:
 - [ ] Validate task-level `workspaces[].workspace` bindings against
       `spec.workspaces` (Pipeline) — same misspelling-suggestion UX.
 - [ ] Cross-file "Find All References" from a Task's result declaration
-      back to every Pipeline task-result usage across the workspace — the
-      reverse-lookup infrastructure `rename.ts` built (`findPipelineFiles`)
-      would extend naturally to this.
-- [ ] Extend cross-file rename to a Pipeline's own identity
-      (`metadata.name`, referenced by `pipelineRef.name` in a
-      PipelineRun) — symmetric with the Task-identity case, not yet built
-      since PipelineRun's `pipelineRef.name` isn't currently tracked as a
-      symbol at all.
+      back to every Pipeline task-result usage across the workspace, and
+      from a Task/Pipeline's own identity to every referencing
+      `taskRef`/`pipelineRef` — `rename.ts`'s `findWorkspaceDocs()` would
+      extend naturally to this.
 - [ ] Diagnostic + quick fix for tasks missing `runAfter` when they
       reference another task's result (implicit vs. explicit ordering).
 - [ ] Publish to the VS Code Marketplace / Open VSX.

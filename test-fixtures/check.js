@@ -13,6 +13,7 @@ const {
   sameDocumentResultEdits,
   taskResultReferenceEdits,
   taskRefIdentityEdits,
+  pipelineRefIdentityEdits,
 } = require("../out/tekton/renameTarget");
 const YAML = require("yaml");
 
@@ -331,6 +332,55 @@ console.log("\nrename: duplicate-name ambiguity trap detection:");
   const ok = a.symbols.metadataName === "build-image" && b.symbols.metadataName === "build-image" && a.symbols.metadataName === b.symbols.metadataName;
   console.log(`  [${ok ? "PASS" : "FAIL"}] two Task files share metadata.name "build-image" (ambiguity guard has something to detect)`);
   if (!ok) failures++;
+}
+
+console.log("\nrename: pipeline identity (metadata.name <-> pipelineRef.name):");
+{
+  // pipeline-typo.yaml's Pipeline is named "build-and-deploy"; this PipelineRun references it.
+  const pipelineSource = fs.readFileSync(path.join(__dirname, "pipeline-typo.yaml"), "utf8");
+  const runSource = fs.readFileSync(path.join(__dirname, "pipelinerun-refs-build.yaml"), "utf8");
+  const pipelineParsed = parseTektonDocument(pipelineSource);
+  const runParsed = parseTektonDocument(runSource);
+
+  // Invoked FROM the PipelineRun's pipelineRef.name, not the Pipeline's own declaration
+  // (or metadata.name: build-and-deploy-run, which also contains this substring).
+  const refOffset = runSource.indexOf("name: build-and-deploy\n") + "name: ".length + 3;
+  const target = resolveRenameTarget(runParsed, refOffset);
+  const ok1 = target?.kind === "pipeline-identity" && target.name === "build-and-deploy";
+
+  const pipelineEdits = target ? [{ range: pipelineParsed.symbols.metadataNameRange, newText: "ship-it" }] : [];
+  const runEdits = pipelineRefIdentityEdits(runParsed, "build-and-deploy", "ship-it");
+  const pipelineResult = applyTextEdits(pipelineSource, pipelineEdits);
+  const runResult = applyTextEdits(runSource, runEdits);
+
+  const ok2 = parseTektonDocument(pipelineResult)?.symbols.metadataName === "ship-it";
+  const ok3 = parseTektonDocument(runResult)?.symbols.pipelineRefName === "ship-it";
+  const ok = ok1 && ok2 && ok3;
+  console.log(`  [${ok ? "PASS" : "FAIL"}] "build-and-deploy" -> "ship-it": target=${ok1}, pipeline-file=${!!ok2}, run-file=${!!ok3}`);
+  if (!ok) {
+    console.log({ target, pipelineResult, runResult });
+    failures++;
+  }
+}
+
+console.log("\nrename: TaskRun's own taskRef (structurally different field from a Pipeline task entry's taskRef):");
+{
+  const taskRunSource = fs.readFileSync(path.join(__dirname, "taskrun-ref.yaml"), "utf8");
+  const taskRunParsed = parseTektonDocument(taskRunSource);
+
+  const refOffset = taskRunSource.indexOf("build-image") + 3;
+  const target = resolveRenameTarget(taskRunParsed, refOffset);
+  const ok1 = target?.kind === "task-identity" && target.name === "build-image";
+
+  const edits = taskRefIdentityEdits(taskRunParsed, "build-image", "compile-image");
+  const result = applyTextEdits(taskRunSource, edits);
+  const ok2 = parseTektonDocument(result)?.symbols.taskRefName === "compile-image";
+  const ok = ok1 && ok2 && edits.length === 1;
+  console.log(`  [${ok ? "PASS" : "FAIL"}] taskrun-ref.yaml: "build-image" -> "compile-image" (${edits.length} edit(s))`);
+  if (!ok) {
+    console.log({ target, edits, result });
+    failures++;
+  }
 }
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) FAILED.`);

@@ -4,32 +4,45 @@ import { parseTektonDocument, ParsedTektonDoc, TASK_LIKE_KINDS, TektonSymbols } 
 const YAML_GLOB = "**/*.{yaml,yml}";
 const EXCLUDE_GLOB = "**/{node_modules,.git}/**";
 
-export interface IndexedTask {
+export interface IndexedResource {
   uri: vscode.Uri;
   parsed: ParsedTektonDoc;
 }
 
+/** name -> (uri string -> indexed resource), so two files sharing a name never clobber each other's entry — see {@link TektonWorkspaceIndex}. */
+type NameIndex = Map<string, Map<string, IndexedResource>>;
+
 /**
- * A lightweight workspace-wide index of Task/ClusterTask/StepAction
- * resources, keyed by their metadata.name (i.e. the name a taskRef points
- * at — usually different from the local `name:` a Pipeline gives that task
- * in spec.tasks[]). This is what lets completions for
- * `$(tasks.X.results.Y)` resolve Y against the actual Task X refers to,
- * even when that Task is defined in a different file — the common case in
- * Helm charts that split Tasks and Pipelines across templates.
+ * A lightweight workspace-wide index of Task/ClusterTask/StepAction and
+ * Pipeline resources, each keyed by their own `metadata.name` (i.e. the
+ * name a `taskRef`/`pipelineRef` points at — usually different from the
+ * local `name:` a Pipeline gives that task in `spec.tasks[]`). This is what
+ * lets completions for `$(tasks.X.results.Y)` resolve `Y` against the
+ * actual Task `X` refers to, and rename resolve cross-file references for
+ * both Tasks and Pipelines, even when defined in a different file — the
+ * common case in Helm charts that split resources across templates.
  *
  * Deliberately simple: no persistence, no incremental AST diffing, just a
  * name -> symbols map rebuilt per changed file, kept current via a file
  * watcher plus live re-indexing of open (possibly unsaved) documents.
+ *
+ * Tasks and Pipelines are kept in two separate name indexes (not merged
+ * into one map keyed by name) — a Task and a Pipeline coincidentally
+ * sharing a name isn't actually ambiguous, since `taskRef` and
+ * `pipelineRef` are resolved independently, and merging them would invent
+ * a collision that doesn't exist.
  */
 export class TektonWorkspaceIndex implements vscode.Disposable {
-  // name -> (uri string -> indexed task). Keyed two levels deep rather than
-  // flat by name so that two different files declaring the same
-  // metadata.name (e.g. a vendored/catalog Task like "git-clone" present in
-  // more than one chart — not an edge case in practice) don't clobber each
-  // other: re-indexing or removing one file only ever touches its own entry.
-  private readonly byTaskName = new Map<string, Map<string, IndexedTask>>();
+  // Two different files declaring the same metadata.name (e.g. a
+  // vendored/catalog Task like "git-clone" present in more than one chart)
+  // is a real, non-hypothetical occurrence — each name index is keyed two
+  // levels deep (name -> uri -> record) specifically so re-indexing or
+  // removing one file only ever touches its own entry, never another
+  // file's entry that happens to share the same name.
+  private readonly byTaskName: NameIndex = new Map();
+  private readonly byPipelineName: NameIndex = new Map();
   private readonly taskNameByUri = new Map<string, string>();
+  private readonly pipelineNameByUri = new Map<string, string>();
   private readonly disposables: vscode.Disposable[] = [];
   private reindexTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -90,35 +103,65 @@ export class TektonWorkspaceIndex implements vscode.Disposable {
 
   private index(uri: vscode.Uri, text: string): void {
     const key = uri.toString();
-    this.removeFromNameIndex(key);
+    this.removeFromIndex(this.byTaskName, this.taskNameByUri, key);
+    this.removeFromIndex(this.byPipelineName, this.pipelineNameByUri, key);
 
     const parsed = parseTektonDocument(text);
-    if (!parsed || !TASK_LIKE_KINDS.has(parsed.symbols.kind) || !parsed.symbols.metadataName) return;
+    if (!parsed?.symbols.metadataName) return;
 
-    const name = parsed.symbols.metadataName;
-    let byUri = this.byTaskName.get(name);
-    if (!byUri) {
-      byUri = new Map();
-      this.byTaskName.set(name, byUri);
+    if (TASK_LIKE_KINDS.has(parsed.symbols.kind)) {
+      this.addToIndex(this.byTaskName, this.taskNameByUri, key, parsed.symbols.metadataName, uri, parsed);
+    } else if (parsed.symbols.kind === "Pipeline") {
+      this.addToIndex(this.byPipelineName, this.pipelineNameByUri, key, parsed.symbols.metadataName, uri, parsed);
     }
-    byUri.set(key, { uri, parsed });
-    this.taskNameByUri.set(key, name);
   }
 
-  /** Removes whatever entry `uriKey` currently owns from byTaskName, without touching any other file's entry under the same name. */
-  private removeFromNameIndex(uriKey: string): void {
-    const prevName = this.taskNameByUri.get(uriKey);
+  private addToIndex(
+    nameIndex: NameIndex,
+    nameByUri: Map<string, string>,
+    uriKey: string,
+    name: string,
+    uri: vscode.Uri,
+    parsed: ParsedTektonDoc
+  ): void {
+    let byUri = nameIndex.get(name);
+    if (!byUri) {
+      byUri = new Map();
+      nameIndex.set(name, byUri);
+    }
+    byUri.set(uriKey, { uri, parsed });
+    nameByUri.set(uriKey, name);
+  }
+
+  /** Removes whatever entry `uriKey` currently owns from `nameIndex`, without touching any other file's entry under the same name. */
+  private removeFromIndex(nameIndex: NameIndex, nameByUri: Map<string, string>, uriKey: string): void {
+    const prevName = nameByUri.get(uriKey);
     if (!prevName) return;
-    const byUri = this.byTaskName.get(prevName);
+    const byUri = nameIndex.get(prevName);
     if (byUri) {
       byUri.delete(uriKey);
-      if (byUri.size === 0) this.byTaskName.delete(prevName);
+      if (byUri.size === 0) nameIndex.delete(prevName);
     }
-    this.taskNameByUri.delete(uriKey);
+    nameByUri.delete(uriKey);
   }
 
   private remove(uri: vscode.Uri): void {
-    this.removeFromNameIndex(uri.toString());
+    const key = uri.toString();
+    this.removeFromIndex(this.byTaskName, this.taskNameByUri, key);
+    this.removeFromIndex(this.byPipelineName, this.pipelineNameByUri, key);
+  }
+
+  private lookupRecord(nameIndex: NameIndex, name: string): IndexedResource | undefined {
+    const byUri = nameIndex.get(name);
+    if (!byUri || byUri.size === 0) return undefined;
+    // Multiple files can legitimately declare the same metadata.name (a
+    // vendored/catalog resource present in more than one chart). There's no
+    // "which file is the user in" context here to disambiguate by
+    // proximity, so pick deterministically by URI rather than by
+    // insertion order — otherwise which one "wins" would flip-flop on
+    // every unrelated edit depending on re-indexing order.
+    const firstKey = [...byUri.keys()].sort()[0];
+    return byUri.get(firstKey);
   }
 
   /** Looks up a Task/ClusterTask/StepAction's declared symbols by its metadata.name (i.e. what a taskRef points at). */
@@ -127,17 +170,8 @@ export class TektonWorkspaceIndex implements vscode.Disposable {
   }
 
   /** Like {@link lookupTask}, but also returns the URI and full parse (incl. lineCounter) needed to build a cross-file Location. */
-  lookupTaskRecord(name: string): IndexedTask | undefined {
-    const byUri = this.byTaskName.get(name);
-    if (!byUri || byUri.size === 0) return undefined;
-    // Multiple files can legitimately declare the same metadata.name (a
-    // vendored/catalog Task present in more than one chart). There's no
-    // "which file is the user in" context here to disambiguate by
-    // proximity, so pick deterministically by URI rather than by
-    // insertion order — otherwise which one "wins" would flip-flop on
-    // every unrelated edit depending on re-indexing order.
-    const firstKey = [...byUri.keys()].sort()[0];
-    return byUri.get(firstKey);
+  lookupTaskRecord(name: string): IndexedResource | undefined {
+    return this.lookupRecord(this.byTaskName, name);
   }
 
   /**
@@ -148,8 +182,24 @@ export class TektonWorkspaceIndex implements vscode.Disposable {
    * as though only one file used the name, when a second file shares it,
    * would silently orphan whatever referenced that second file.
    */
-  lookupAllTaskRecords(name: string): IndexedTask[] {
+  lookupAllTaskRecords(name: string): IndexedResource[] {
     const byUri = this.byTaskName.get(name);
+    return byUri ? [...byUri.values()] : [];
+  }
+
+  /** Looks up a Pipeline's declared symbols by its metadata.name (i.e. what a pipelineRef points at). */
+  lookupPipeline(name: string): TektonSymbols | undefined {
+    return this.lookupPipelineRecord(name)?.parsed.symbols;
+  }
+
+  /** Like {@link lookupPipeline}, but also returns the URI and full parse needed to build a cross-file Location. */
+  lookupPipelineRecord(name: string): IndexedResource | undefined {
+    return this.lookupRecord(this.byPipelineName, name);
+  }
+
+  /** All Pipeline files declaring `name` — see {@link lookupAllTaskRecords}, same reasoning, for Pipelines. */
+  lookupAllPipelineRecords(name: string): IndexedResource[] {
+    const byUri = this.byPipelineName.get(name);
     return byUri ? [...byUri.values()] : [];
   }
 

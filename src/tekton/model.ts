@@ -47,6 +47,14 @@ export interface TektonSymbols {
   metadataName: string | undefined;
   /** offset range of the metadata.name scalar itself, for rename edits */
   metadataNameRange?: [number, number];
+  /** PipelineRun.spec.pipelineRef.name — the Pipeline this run points at */
+  pipelineRefName?: string;
+  /** offset range of that pipelineRef.name scalar, for rename edits */
+  pipelineRefNameRange?: [number, number];
+  /** TaskRun.spec.taskRef.name — the Task this run points at (distinct from TaskSymbol.taskRefName, which is per pipeline-task-entry) */
+  taskRefName?: string;
+  /** offset range of that taskRef.name scalar, for rename edits */
+  taskRefNameRange?: [number, number];
   params: ParamSymbol[];
   workspaces: WorkspaceSymbol[];
   results: ResultSymbol[];
@@ -80,6 +88,17 @@ function mapOf(node: unknown): YAMLMap | undefined {
 
 function scalarString(node: unknown): string | undefined {
   return isScalar(node) && typeof node.value === "string" ? node.value : undefined;
+}
+
+function scalarRange(node: unknown): [number, number] | undefined {
+  return isScalar(node) && node.range ? [node.range[0], node.range[1]] : undefined;
+}
+
+/** Reads a `<key>: { name: ... }` ref field (taskRef, pipelineRef) directly under `map`. */
+function refNameAndRange(map: YAMLMap | undefined, key: string): { name?: string; range?: [number, number] } {
+  const ref = mapOf(map?.get(key, true));
+  const nameNode = ref?.get("name", true);
+  return { name: scalarString(nameNode), range: scalarRange(nameNode) };
 }
 
 function scalarBoolean(node: unknown): boolean | undefined {
@@ -155,17 +174,8 @@ function resultEntries(seq: YAMLSeq | undefined): ResultSymbol[] {
 function taskEntries(seq: YAMLSeq | undefined): TaskSymbol[] {
   const out: TaskSymbol[] = [];
   forEachNamedItem(seq, (m, name, range) => {
-    const taskRef = mapOf(m.get("taskRef", true));
-    const taskRefNameNode = taskRef?.get("name", true);
-    out.push({
-      name,
-      range,
-      taskRefName: scalarString(taskRefNameNode),
-      taskRefNameRange:
-        isScalar(taskRefNameNode) && taskRefNameNode.range
-          ? [taskRefNameNode.range[0], taskRefNameNode.range[1]]
-          : undefined,
-    });
+    const taskRef = refNameAndRange(m, "taskRef");
+    out.push({ name, range, taskRefName: taskRef.name, taskRefNameRange: taskRef.range });
   });
   return out;
 }
@@ -211,14 +221,13 @@ export function parseTektonDocument(source: string): ParsedTektonDoc | undefined
 
   const metadata = mapOf(root.get("metadata", true));
   const metadataNameNode = metadata?.get("name", true);
-  const metadataName =
-    isScalar(metadataNameNode) && typeof metadataNameNode.value === "string" ? metadataNameNode.value : undefined;
-  const metadataNameRange: [number, number] | undefined =
-    isScalar(metadataNameNode) && metadataNameNode.range
-      ? [metadataNameNode.range[0], metadataNameNode.range[1]]
-      : undefined;
+  const metadataName = scalarString(metadataNameNode);
+  const metadataNameRange = scalarRange(metadataNameNode);
 
   const spec = mapOf(root.get("spec", true));
+
+  const pipelineRef = kind === "PipelineRun" ? refNameAndRange(spec, "pipelineRef") : undefined;
+  const ownTaskRef = kind === "TaskRun" ? refNameAndRange(spec, "taskRef") : undefined;
 
   const params = paramEntries(seqOf(spec?.get("params", true)));
   const workspaces = workspaceEntries(seqOf(spec?.get("workspaces", true)));
@@ -234,7 +243,20 @@ export function parseTektonDocument(source: string): ParsedTektonDoc | undefined
     lineCounter,
     text,
     isHelmTemplated,
-    symbols: { kind, apiVersion: apiVersionValue, metadataName, metadataNameRange, params, workspaces, results, tasks },
+    symbols: {
+      kind,
+      apiVersion: apiVersionValue,
+      metadataName,
+      metadataNameRange,
+      pipelineRefName: pipelineRef?.name,
+      pipelineRefNameRange: pipelineRef?.range,
+      taskRefName: ownTaskRef?.name,
+      taskRefNameRange: ownTaskRef?.range,
+      params,
+      workspaces,
+      results,
+      tasks,
+    },
   };
 }
 

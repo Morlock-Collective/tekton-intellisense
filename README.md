@@ -54,14 +54,17 @@ file.
   collects every `$(...)` reference to it in the current document.
 - **Rename (F2)** — params, workspaces, and pipeline task aliases rename
   within their own file, declaration and every `$(...)` reference together.
-  A Task's declared result, and a Task's own identity
-  (`metadata.name`/`taskRef.name`), rename **workspace-wide by default** —
+  A Task's declared result, a Task's own identity (`metadata.name`,
+  referenced by a Pipeline task's `taskRef.name` *or* a TaskRun's own
+  `taskRef`), and a Pipeline's own identity (`metadata.name`, referenced by
+  a PipelineRun's `pipelineRef`) all rename **workspace-wide by default** —
   invoke it from either the declaration or any reference to it, anywhere in
   the workspace, and everything updates together. If a name is ambiguous
-  (two different Task files sharing a `metadata.name` — a vendored/catalog
-  Task in more than one chart, not a hypothetical) the local rename still
-  happens but cross-file updates are skipped with an explicit warning
-  rather than guessing which file a reference actually meant.
+  (two different Task or Pipeline files sharing a `metadata.name` — a
+  vendored/catalog Task in more than one chart, not a hypothetical) the
+  local rename still happens but cross-file updates are skipped with an
+  explicit warning rather than guessing which file a reference actually
+  meant.
 - **Commands** (Command Palette or editor context menu):
   - `Tekton: Bind Parameter to Environment Variable` — pick a declared
     param, name the env var, and it's inserted into the `env:` list of the

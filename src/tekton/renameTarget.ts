@@ -5,14 +5,16 @@ import { findParamRefs } from "./paramRefs";
  * What's being renamed, and the range of the specific token under the
  * cursor (for `prepareRename` to anchor the rename widget). The kind
  * determines scope: param/workspace/task-alias are private to the document
- * they're declared in; result and task-identity can be referenced from
- * other files and need workspace-wide handling — see rename.ts.
+ * they're declared in; result, task-identity, and pipeline-identity can be
+ * referenced from other files and need workspace-wide handling — see
+ * rename.ts.
  */
 export type RenameTarget =
   | { kind: "param" | "workspace" | "task-alias"; name: string; range: [number, number] }
   | { kind: "result"; name: string; range: [number, number] }
   | { kind: "task-result"; taskAlias: string; resultName: string; range: [number, number]; taskEntry: TaskSymbol }
-  | { kind: "task-identity"; name: string; range: [number, number] };
+  | { kind: "task-identity"; name: string; range: [number, number] }
+  | { kind: "pipeline-identity"; name: string; range: [number, number] };
 
 function inRange(range: [number, number] | undefined, offset: number): boolean {
   return !!range && offset >= range[0] && offset <= range[1];
@@ -45,6 +47,15 @@ export function resolveRenameTarget(parsed: ParsedTektonDoc, offset: number): Re
   }
   if (symbols.metadataName && TASK_LIKE_KINDS.has(symbols.kind) && inRange(symbols.metadataNameRange, offset)) {
     return { kind: "task-identity", name: symbols.metadataName, range: symbols.metadataNameRange! };
+  }
+  if (symbols.metadataName && symbols.kind === "Pipeline" && inRange(symbols.metadataNameRange, offset)) {
+    return { kind: "pipeline-identity", name: symbols.metadataName, range: symbols.metadataNameRange! };
+  }
+  if (symbols.pipelineRefName && inRange(symbols.pipelineRefNameRange, offset)) {
+    return { kind: "pipeline-identity", name: symbols.pipelineRefName, range: symbols.pipelineRefNameRange! };
+  }
+  if (symbols.taskRefName && inRange(symbols.taskRefNameRange, offset)) {
+    return { kind: "task-identity", name: symbols.taskRefName, range: symbols.taskRefNameRange! };
   }
 
   for (const ref of findParamRefs(text)) {
@@ -145,7 +156,12 @@ export function taskResultReferenceEdits(parsed: ParsedTektonDoc, taskAlias: str
   return edits;
 }
 
-/** Every `taskRef: { name: <name> }` in `parsed` pointing at one specific Task identity. */
+/**
+ * Every `taskRef: { name: <name> }` in `parsed` pointing at one specific
+ * Task identity — both a Pipeline's per-task-entry `taskRef` and a
+ * TaskRun's own top-level `spec.taskRef`, which are structurally different
+ * fields but the same kind of reference.
+ */
 export function taskRefIdentityEdits(parsed: ParsedTektonDoc, name: string, newName: string): TextEdit[] {
   const edits: TextEdit[] = [];
   for (const t of parsed.symbols.tasks) {
@@ -153,5 +169,16 @@ export function taskRefIdentityEdits(parsed: ParsedTektonDoc, name: string, newN
       edits.push({ range: t.taskRefNameRange, newText: newName });
     }
   }
+  if (parsed.symbols.kind === "TaskRun" && parsed.symbols.taskRefName === name && parsed.symbols.taskRefNameRange) {
+    edits.push({ range: parsed.symbols.taskRefNameRange, newText: newName });
+  }
   return edits;
+}
+
+/** Every `pipelineRef: { name: <name> }` in `parsed` (a PipelineRun's top-level spec.pipelineRef) pointing at one specific Pipeline identity. */
+export function pipelineRefIdentityEdits(parsed: ParsedTektonDoc, name: string, newName: string): TextEdit[] {
+  if (parsed.symbols.kind === "PipelineRun" && parsed.symbols.pipelineRefName === name && parsed.symbols.pipelineRefNameRange) {
+    return [{ range: parsed.symbols.pipelineRefNameRange, newText: newName }];
+  }
+  return [];
 }
