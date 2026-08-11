@@ -26,6 +26,10 @@ file.
   (for Pipelines) `spec.tasks`/`spec.finally` names. Unknown or misspelled
   names get a warning with a "did you mean" suggestion (Levenshtein
   distance) and a quick fix to apply it.
+- **Duplicate-name validation** — a repeated name within `spec.params`,
+  `spec.workspaces`, `spec.results`, or `spec.tasks`/`finally` is flagged as
+  an error on every occurrence — the kind of thing the Kubernetes API
+  server rejects at apply time anyway.
 - **Context-aware completion** — typing `$(params.` (or `workspaces.`,
   `results.`, `tasks.`, `context.`) suggests exactly what's valid there:
   declared names for the current document, filtered by resource kind (no

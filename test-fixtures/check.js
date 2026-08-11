@@ -5,6 +5,7 @@ const path = require("path");
 const { parseTektonDocument } = require("../out/tekton/model");
 const { findParamRefs } = require("../out/tekton/paramRefs");
 const { closestMatch } = require("../out/tekton/levenshtein");
+const { findDuplicateGroups } = require("../out/tekton/duplicates");
 
 function check(file) {
   const source = fs.readFileSync(path.join(__dirname, file), "utf8");
@@ -45,6 +46,19 @@ function check(file) {
 
 check("pipeline-typo.yaml");
 check("helm-templated-task.yaml");
+
+console.log("\nduplicate-name check:");
+const dup = parseTektonDocument(fs.readFileSync(path.join(__dirname, "pipeline-duplicates.yaml"), "utf8"));
+for (const [list, label] of [
+  [dup.symbols.params, "parameter"],
+  [dup.symbols.workspaces, "workspace"],
+  [dup.symbols.results, "result"],
+  [dup.symbols.tasks, "task"],
+]) {
+  for (const [name, occurrences] of findDuplicateGroups(list)) {
+    console.log(`  [ERROR] duplicate ${label} name "${name}" — declared ${occurrences.length} times`);
+  }
+}
 
 // Cross-file completion resolution: tasks.<local>.results.<X> should resolve
 // against the Task that taskRef actually points at, in a *different* file.

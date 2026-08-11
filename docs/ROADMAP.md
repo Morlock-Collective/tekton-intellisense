@@ -120,6 +120,20 @@ ordering in the mapping.
       `lookupTaskRecord()` alongside it returning `{ uri, parsed }` for the
       cross-file Location math definitions needs.
 
+## Milestone 1.5 — Duplicate-name validation (done)
+
+- [x] `src/tekton/duplicates.ts`: a small, `vscode`-free
+      `findDuplicateGroups()` helper (same pattern as `levenshtein.ts` —
+      pure logic, testable via plain Node, wired into `vscode.Diagnostic`
+      only at the edges). Wired into `diagnostics.ts` to flag repeated
+      names within `spec.params`, `spec.workspaces`, `spec.results`, and
+      `spec.tasks`/`finally` (task names must be unique across both lists
+      combined). Every occurrence past the first is flagged as an
+      **error** (not a warning, unlike the "did you mean" checks) — unlike
+      a misspelled reference, this is something the Kubernetes API server
+      rejects outright at apply time, so there's no ambiguity about intent
+      to preserve.
+
 ## Known limitations (v0.1)
 
 - Task-level `workspaces: [{name, workspace: <pipeline-workspace-name>}]`

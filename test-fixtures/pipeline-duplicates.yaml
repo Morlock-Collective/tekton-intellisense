@@ -1,0 +1,20 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: duplicate-names
+spec:
+  params:
+    - name: image-repo
+      type: string
+    - name: image-repo
+      type: string
+      description: accidentally repeated
+  workspaces:
+    - name: shared-workspace
+  tasks:
+    - name: build
+      taskRef:
+        name: build-image
+    - name: build
+      taskRef:
+        name: build-image-again

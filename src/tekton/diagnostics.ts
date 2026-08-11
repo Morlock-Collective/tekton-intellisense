@@ -1,12 +1,44 @@
 import * as vscode from "vscode";
-import { parseTektonDocument, TektonSymbols } from "./model";
+import { NamedSymbol, parseTektonDocument, TektonSymbols } from "./model";
 import { findParamRefs, ParamRef } from "./paramRefs";
 import { closestMatch } from "./levenshtein";
+import { findDuplicateGroups } from "./duplicates";
 
 export const DIAGNOSTIC_SOURCE = "tekton-aid";
 
 function offsetToPosition(doc: vscode.TextDocument, offset: number): vscode.Position {
   return doc.positionAt(offset);
+}
+
+/**
+ * Flags repeated names within a single declaration list (spec.params,
+ * spec.workspaces, spec.results, spec.tasks+finally). Tekton/Kubernetes
+ * schema validation rejects these outright at apply time, so this is a real
+ * error, not a style nit — every occurrence past the first is flagged.
+ */
+function checkDuplicateNames(
+  document: vscode.TextDocument,
+  symbols: NamedSymbol[],
+  label: string
+): vscode.Diagnostic[] {
+  const diagnostics: vscode.Diagnostic[] = [];
+  for (const [name, occurrences] of findDuplicateGroups(symbols)) {
+    for (const occurrence of occurrences) {
+      if (!occurrence.range) continue;
+      const range = new vscode.Range(
+        offsetToPosition(document, occurrence.range[0]),
+        offsetToPosition(document, occurrence.range[1])
+      );
+      const diagnostic = new vscode.Diagnostic(
+        range,
+        `Duplicate ${label} name "${name}" — declared ${occurrences.length} times.`,
+        vscode.DiagnosticSeverity.Error
+      );
+      diagnostic.source = DIAGNOSTIC_SOURCE;
+      diagnostics.push(diagnostic);
+    }
+  }
+  return diagnostics;
 }
 
 function checkRef(
@@ -84,9 +116,14 @@ export function computeDiagnostics(document: vscode.TextDocument): vscode.Diagno
   const parsed = parseTektonDocument(source);
   if (!parsed) return [];
 
-  const refs = findParamRefs(parsed.text);
-  const diagnostics: vscode.Diagnostic[] = [];
+  const diagnostics: vscode.Diagnostic[] = [
+    ...checkDuplicateNames(document, parsed.symbols.params, "parameter"),
+    ...checkDuplicateNames(document, parsed.symbols.workspaces, "workspace"),
+    ...checkDuplicateNames(document, parsed.symbols.results, "result"),
+    ...checkDuplicateNames(document, parsed.symbols.tasks, "task"),
+  ];
 
+  const refs = findParamRefs(parsed.text);
   for (const ref of refs) {
     const problem = checkRef(ref, parsed.symbols);
     if (!problem) continue;
