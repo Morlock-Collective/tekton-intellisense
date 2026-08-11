@@ -413,6 +413,39 @@ treatment in one pass rather than leaving the second half-done:
       existing Pipeline-task-entry `taskRef` case, so it needed its own
       test, not just reuse of the existing one).
 
+## Milestone 1.10 — Fix: ambiguous cross-file rename silently picked the wrong file (done)
+
+Reported bug: renaming a Pipeline's identity from where it's *used* (a
+PipelineRun's `pipelineRef.name`) when that name is ambiguous (two
+Pipeline files share it) renamed one arbitrary candidate's declaration —
+but not the actual `pipelineRef.name` the rename was invoked from, since
+cross-file propagation is (correctly) skipped once ambiguity is detected.
+Net effect: an unrelated file got silently rewritten, and the file the
+user was actually looking at kept referencing the old, now-orphaned name.
+The same bug existed for Task-identity rename invoked from a `taskRef`, and
+for Task-result rename invoked from a Pipeline's `$(tasks.X.results.Y)`.
+
+- [x] Root cause: `resolveIdentityRecord()` (and the equivalent inline
+      lookup in the `task-result` case) used `lookupTaskRecord()`/
+      `lookupPipelineRecord()` — the *singular*, deterministic-tie-break
+      lookups meant for completions/hover, where picking *a* plausible
+      answer is the right tradeoff. Rename needs the opposite tradeoff:
+      resolving a reference to a declaration is only safe when there's
+      exactly one candidate, because a reference's target is exactly as
+      ambiguous as the name it points at.
+- [x] Fix: added `resolveUnambiguous()`, used everywhere a record is
+      resolved *from a reference* (as opposed to F2 invoked directly on
+      the declaration, which is unambiguous by construction — it's
+      whichever file is open). It throws — rejecting the rename outright
+      with an explanation — when the name resolves to zero or more than
+      one candidate, instead of silently picking one.
+- [x] Verified with a decision-logic simulation in `test-fixtures/check.js`
+      (mirroring `rename.ts`'s exact branches, since the module itself
+      needs `vscode` and can't run under plain Node): reference-resolved
+      + ambiguous now rejects; declaration-invoked still always succeeds
+      regardless of ambiguity elsewhere; reference-resolved + unambiguous
+      still succeeds normally.
+
 ## Next up
 
 - [ ] Extend the `resolveParamsTarget`-style AST-only targeting to

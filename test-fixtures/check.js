@@ -383,5 +383,40 @@ console.log("\nrename: TaskRun's own taskRef (structurally different field from 
   }
 }
 
+console.log("\nrename: reject (not guess) when resolving an ambiguous name FROM a reference:");
+{
+  // rename.ts's TektonRenameProvider itself can't run under plain Node (it
+  // imports "vscode"), so this mirrors its resolveIdentityRecord() /
+  // resolveUnambiguous() decision logic exactly, to lock in the fix for a
+  // real reported bug: renaming a Pipeline from a PipelineRun's
+  // pipelineRef.name, when that name is ambiguous (two Pipeline files
+  // share it), used to silently rename one arbitrary candidate while
+  // leaving the actual clicked reference untouched. The fix rejects
+  // outright instead of guessing whenever resolution starts from a
+  // reference (not the declaration itself).
+  function resolveIdentity(invokedOnOwnDeclaration, name, allCandidateUris) {
+    if (invokedOnOwnDeclaration) return { ok: true, uri: "CURRENT_DOCUMENT" };
+    if (allCandidateUris.length === 0) return { ok: false, reason: "not-found" };
+    if (allCandidateUris.length > 1) return { ok: false, reason: "ambiguous" };
+    return { ok: true, uri: allCandidateUris[0] };
+  }
+
+  // Invoked FROM a PipelineRun's pipelineRef.name (not the declaration), name is ambiguous.
+  const fromReference = resolveIdentity(false, "build-and-deploy", ["fileA.yaml", "fileB.yaml"]);
+  const ok1 = fromReference.ok === false && fromReference.reason === "ambiguous";
+
+  // Invoked directly ON one of the two same-named declarations — must still succeed (case is unambiguous by construction).
+  const fromDeclaration = resolveIdentity(true, "build-and-deploy", ["fileA.yaml", "fileB.yaml"]);
+  const ok2 = fromDeclaration.ok === true && fromDeclaration.uri === "CURRENT_DOCUMENT";
+
+  // Invoked from a reference where the name is NOT ambiguous — must still succeed normally.
+  const unambiguous = resolveIdentity(false, "build-and-deploy", ["fileA.yaml"]);
+  const ok3 = unambiguous.ok === true && unambiguous.uri === "fileA.yaml";
+
+  const ok = ok1 && ok2 && ok3;
+  console.log(`  [${ok ? "PASS" : "FAIL"}] from-reference+ambiguous=reject(${ok1}), from-declaration=always-ok(${ok2}), from-reference+unambiguous=ok(${ok3})`);
+  if (!ok) failures++;
+}
+
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) FAILED.`);
 process.exit(failures === 0 ? 0 : 1);

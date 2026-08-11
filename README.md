@@ -61,10 +61,13 @@ file.
   invoke it from either the declaration or any reference to it, anywhere in
   the workspace, and everything updates together. If a name is ambiguous
   (two different Task or Pipeline files sharing a `metadata.name` — a
-  vendored/catalog Task in more than one chart, not a hypothetical) the
-  local rename still happens but cross-file updates are skipped with an
-  explicit warning rather than guessing which file a reference actually
-  meant.
+  vendored/catalog Task in more than one chart, not a hypothetical), what
+  happens depends on where you invoked it from: on the declaration itself
+  it's unambiguous by construction, so that file renames and cross-file
+  reference updates are skipped with an explicit warning; from a
+  *reference* pointing at an ambiguous name, the rename is rejected
+  outright, since there's no principled way to know which same-named
+  declaration the reference actually means.
 - **Commands** (Command Palette or editor context menu):
   - `Tekton: Bind Parameter to Environment Variable` — pick a declared
     param, name the env var, and it's inserted into the `env:` list of the

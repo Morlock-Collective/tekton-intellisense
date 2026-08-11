@@ -61,6 +61,30 @@ function assertNoLocalCollision(parsed: ParsedTektonDoc, kind: SameDocKind, oldN
   }
 }
 
+/**
+ * Resolves a name to exactly one workspace record, or throws. Used
+ * whenever the record is being resolved *from a reference* rather than
+ * from sitting directly on the declaration: if the name is ambiguous (more
+ * than one file declares it), there is no principled way to know which
+ * declaration the reference actually means — Tekton itself can't tell them
+ * apart by name alone either — so renaming would either have to guess (and
+ * risk silently rewriting the wrong file while leaving the very reference
+ * that was clicked unchanged, since a name that's ambiguous when resolving
+ * *to* a declaration is equally ambiguous when resolving *from* it back to
+ * other references) or, as here, refuse outright and say why.
+ */
+function resolveUnambiguous(candidates: IndexedResource[], name: string, kindLabel: string): IndexedResource {
+  if (candidates.length === 0) {
+    throw new Error(`Tekton Aid: can't rename — no ${kindLabel} named "${name}" is indexed in this workspace.`);
+  }
+  if (candidates.length > 1) {
+    throw new Error(
+      `Tekton Aid: can't rename — "${name}" is declared by ${candidates.length} different ${kindLabel} files in this workspace, and it's ambiguous which one this reference means. Rename the declaration directly instead, or make the name unique first.`
+    );
+  }
+  return candidates[0];
+}
+
 async function readFileText(uri: vscode.Uri): Promise<string | undefined> {
   const open = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri.toString());
   if (open) return open.getText();
@@ -149,14 +173,15 @@ export class TektonRenameProvider implements vscode.RenameProvider {
 
       case "task-result": {
         // Invoked on some Pipeline's $(tasks.X.results.Y) — resolve the real Task Y belongs to.
-        const record = target.taskEntry.taskRefName
-          ? this.workspaceIndex.lookupTaskRecord(target.taskEntry.taskRefName)
-          : undefined;
-        if (!record) {
-          throw new Error(
-            `Tekton Aid: can't rename — the Task "${target.taskEntry.taskRefName ?? "?"}" this refers to isn't indexed in this workspace.`
-          );
+        // Reference-resolved, so an ambiguous taskRefName must reject outright (see resolveUnambiguous).
+        if (!target.taskEntry.taskRefName) {
+          throw new Error(`Tekton Aid: can't rename — this pipeline task has no taskRef.`);
         }
+        const record = resolveUnambiguous(
+          this.workspaceIndex.lookupAllTaskRecords(target.taskEntry.taskRefName),
+          target.taskEntry.taskRefName,
+          "Task"
+        );
         assertNoLocalCollision(record.parsed, "result", target.resultName, newName);
         addEdits(edit, record.uri, record.parsed, sameDocumentResultEdits(record.parsed, target.resultName, newName));
         await this.addCrossFileResultEdits(edit, record.parsed, target.resultName, newName);
@@ -164,12 +189,14 @@ export class TektonRenameProvider implements vscode.RenameProvider {
       }
 
       case "task-identity": {
-        const record = this.resolveIdentityRecord(document, parsed, target.name, TASK_LIKE_KINDS, (idx, n) =>
-          idx.lookupTaskRecord(n)
+        const record = this.resolveIdentityRecord(
+          document,
+          parsed,
+          target.name,
+          TASK_LIKE_KINDS,
+          (idx, n) => idx.lookupAllTaskRecords(n),
+          "Task/ClusterTask/StepAction"
         );
-        if (!record) {
-          throw new Error(`Tekton Aid: can't rename — no Task/ClusterTask/StepAction named "${target.name}" is indexed in this workspace.`);
-        }
 
         const nameRange = record.parsed.symbols.metadataNameRange;
         if (nameRange) addEdits(edit, record.uri, record.parsed, [{ range: nameRange, newText: newName }]);
@@ -197,12 +224,14 @@ export class TektonRenameProvider implements vscode.RenameProvider {
       }
 
       case "pipeline-identity": {
-        const record = this.resolveIdentityRecord(document, parsed, target.name, PIPELINE_KIND, (idx, n) =>
-          idx.lookupPipelineRecord(n)
+        const record = this.resolveIdentityRecord(
+          document,
+          parsed,
+          target.name,
+          PIPELINE_KIND,
+          (idx, n) => idx.lookupAllPipelineRecords(n),
+          "Pipeline"
         );
-        if (!record) {
-          throw new Error(`Tekton Aid: can't rename — no Pipeline named "${target.name}" is indexed in this workspace.`);
-        }
 
         const nameRange = record.parsed.symbols.metadataNameRange;
         if (nameRange) addEdits(edit, record.uri, record.parsed, [{ range: nameRange, newText: newName }]);
@@ -230,18 +259,27 @@ export class TektonRenameProvider implements vscode.RenameProvider {
     }
   }
 
-  /** Prefers the document rename was invoked from when it *is* the resource being renamed, over whatever the index's deterministic tie-break would otherwise pick. */
+  /**
+   * When F2 is invoked directly on the declaration itself, which file is
+   * meant is unambiguous by construction — it's the one open right now —
+   * regardless of whether some other file happens to declare the same
+   * name (that only affects whether cross-file *reference* updates are
+   * safe, handled separately below). Only when resolving *from a
+   * reference* elsewhere does an ambiguous name become a real problem,
+   * which {@link resolveUnambiguous} rejects outright.
+   */
   private resolveIdentityRecord(
     document: vscode.TextDocument,
     parsed: ParsedTektonDoc,
     name: string,
     ownKinds: ReadonlySet<TektonKind>,
-    lookup: (index: TektonWorkspaceIndex, name: string) => IndexedResource | undefined
-  ): IndexedResource | undefined {
+    lookupAll: (index: TektonWorkspaceIndex, name: string) => IndexedResource[],
+    kindLabel: string
+  ): IndexedResource {
     if (parsed.symbols.metadataName === name && ownKinds.has(parsed.symbols.kind)) {
       return { uri: document.uri, parsed };
     }
-    return lookup(this.workspaceIndex, name);
+    return resolveUnambiguous(lookupAll(this.workspaceIndex, name), name, kindLabel);
   }
 
   private async addCrossFileResultEdits(
