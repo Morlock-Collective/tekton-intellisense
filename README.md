@@ -55,8 +55,13 @@ file.
 - **Go to Definition / Find All References** — jump from a `$(...)`
   reference straight to its declaration; for `$(tasks.X.results.Y)`, `Y`
   resolves cross-file to the actual Task's declared result, even in a file
-  you haven't opened. "Find All References" from a declaration or a use
-  collects every `$(...)` reference to it in the current document.
+  you haven't opened. "Find All References" collects every `$(...)`
+  reference to a param/workspace/task-alias within the current document;
+  for a Task's own result or a Task/Pipeline's own identity
+  (`taskRef`/`pipelineRef`), it searches the whole workspace — and unlike
+  rename, is happy to show references from more than one same-named
+  candidate rather than picking one, since showing an extra location
+  costs a glance, not a rewrite.
 - **Rename (F2)** — params, workspaces, and pipeline task aliases rename
   within their own file, declaration and every `$(...)` reference together.
   A Task's declared result, a Task's own identity (`metadata.name`,

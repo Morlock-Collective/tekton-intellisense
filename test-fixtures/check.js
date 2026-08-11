@@ -732,5 +732,77 @@ console.log("\naddConditional simulation:");
   }
 }
 
+// --- Find All References: cross-file, and deliberately permissive on ambiguity ---
+//
+// references.ts's TektonReferenceProvider itself needs vscode (workspace
+// scanning, Location objects) and can't run under plain Node. What's
+// tested here is its one genuinely new piece of decision logic: unlike
+// rename (which must reject an ambiguous name outright — silently picking
+// one candidate to rewrite risks corrupting the wrong file), find-
+// references is read-only, so on an ambiguous name it searches *every*
+// matching candidate and merges the results — a design choice, not just
+// glue code, so it's worth locking in explicitly.
+
+console.log("\nFind All References: cross-file result, merges every ambiguous candidate:");
+{
+  // task-build-image.yaml and task-build-image-duplicate.yaml both declare
+  // metadata.name: build-image (the same fixture pair the rename ambiguity
+  // tests use) — simulates workspaceIndex.lookupAllTaskRecords("build-image")
+  // returning both, and references.ts iterating all of them rather than
+  // rejecting.
+  const candidateFiles = ["task-build-image.yaml", "task-build-image-duplicate.yaml"];
+  const pipelineFile = "pipeline-uses-result.yaml"; // references $(tasks.build.results.digest), taskRef: build-image
+
+  const found = []; // { file, kind: "decl"|"self-ref"|"cross-ref" }
+  for (const file of candidateFiles) {
+    const parsed = parseTektonDocument(fs.readFileSync(path.join(__dirname, file), "utf8"));
+    for (const range of sameDocumentResultEdits(parsed, "digest", "digest").map((e) => e.range)) {
+      found.push({ file, range });
+    }
+  }
+  const pipelineParsed = parseTektonDocument(fs.readFileSync(path.join(__dirname, pipelineFile), "utf8"));
+  for (const taskEntry of pipelineParsed.symbols.tasks) {
+    if (taskEntry.taskRefName !== "build-image") continue;
+    for (const range of taskResultReferenceEdits(pipelineParsed, taskEntry.name, "digest", "digest").map((e) => e.range)) {
+      found.push({ file: pipelineFile, range });
+    }
+  }
+
+  const ok =
+    found.some((f) => f.file === "task-build-image.yaml") &&
+    found.some((f) => f.file === "task-build-image-duplicate.yaml") &&
+    found.some((f) => f.file === pipelineFile);
+  console.log(`  [${ok ? "PASS" : "FAIL"}] references found across both ambiguous Task files and the referencing Pipeline (${found.length} total)`);
+  if (!ok) {
+    console.log(found);
+    failures++;
+  }
+}
+
+console.log("\nFind All References: cross-file task identity (taskRef.name, both a Pipeline task entry and a TaskRun's own taskRef):");
+{
+  const pipelineSource = fs.readFileSync(path.join(__dirname, "pipeline-crossfile.yaml"), "utf8");
+  const taskRunSource = fs.readFileSync(path.join(__dirname, "taskrun-ref.yaml"), "utf8");
+  const pipelineParsed = parseTektonDocument(pipelineSource);
+  const taskRunParsed = parseTektonDocument(taskRunSource);
+
+  const pipelineRefs = taskRefIdentityEdits(pipelineParsed, "build-image", "build-image");
+  const taskRunRefs = taskRefIdentityEdits(taskRunParsed, "build-image", "build-image");
+
+  const ok = pipelineRefs.length === 1 && taskRunRefs.length === 1;
+  console.log(`  [${ok ? "PASS" : "FAIL"}] found in both the Pipeline task entry (${pipelineRefs.length}) and the TaskRun's own taskRef (${taskRunRefs.length})`);
+  if (!ok) failures++;
+}
+
+console.log("\nFind All References: cross-file pipeline identity (pipelineRef.name):");
+{
+  const runSource = fs.readFileSync(path.join(__dirname, "pipelinerun-refs-build.yaml"), "utf8");
+  const runParsed = parseTektonDocument(runSource);
+  const refs = pipelineRefIdentityEdits(runParsed, "build-and-deploy", "build-and-deploy");
+  const ok = refs.length === 1;
+  console.log(`  [${ok ? "PASS" : "FAIL"}] found the PipelineRun's pipelineRef.name (${refs.length} match(es))`);
+  if (!ok) failures++;
+}
+
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) FAILED.`);
 process.exit(failures === 0 ? 0 : 1);

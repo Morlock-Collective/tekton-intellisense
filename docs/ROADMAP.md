@@ -201,10 +201,6 @@ not yet done.
   comes up empty for such charts unless the taskRef itself is also a
   literal string — reasonable, since a templated name needs a templated
   reference to match it anyway.
-- "Find All References" is scoped to the current document. Reverse lookup
-  ("which Pipelines use this Task's `digest` result") would need indexing
-  every Pipeline's `$(tasks.*.results.*)` usages, not just Task
-  declarations — a second index alongside `workspaceIndex`, not yet built.
 - No settings for custom Tekton API group/version allow-list (assumes any
   `tekton.dev/*`).
 - `Add Parameter` doesn't special-case an existing `params: []` (flow-style,
@@ -524,13 +520,49 @@ machinery.
       whole time — a real example of exactly the failure mode this check
       exists for (invisible until a `PipelineRun` fails at runtime).
 
+## Milestone 1.13 — Cross-file Find All References (done)
+
+Previously "Find All References" was scoped to the current document only
+(a deliberate, documented limitation). Extended it to match what rename
+already resolves for the same targets — a Task's own result, a Task's own
+identity, a Pipeline's own identity — with one deliberate difference: where
+rename must *reject* an ambiguous name outright (silently rewriting the
+wrong file would corrupt it), a read-only "find references" is free to
+search every candidate and merge the results instead, since an extra,
+obviously-unrelated location in the results panel costs the user a glance,
+not a broken file.
+
+- [x] Extracted the machinery `rename.ts` had grown privately into two
+      shared modules so `references.ts` could reuse it without duplicating
+      it: `workspaceScan.ts` (`findWorkspaceDocs()`, the on-demand
+      workspace file scan) and `rangeUtils.ts` (`toVscodeRange()`, offset →
+      `vscode.Range` via a parsed doc's `LineCounter`, works for files that
+      were never opened). `rename.ts` and `definitions.ts` were both
+      updated to import these instead of keeping their own copies.
+- [x] `references.ts` rewritten to detect its target via
+      `resolveRenameTarget()` (the same function `rename.ts` uses) instead
+      of its own narrower, separate detection logic — which also fixed a
+      latent imprecision: the old detection treated any click inside a
+      `$(tasks.X.results.Y)` reference as "references to task alias X",
+      never distinguishing the `Y` (result) segment at all, so "find
+      references to a Task's result" wasn't really implemented, just
+      approximated.
+- [x] Cross-file result references and identity references (Task via
+      `taskRef.name`/TaskRun's own `taskRef`, Pipeline via `pipelineRef`)
+      now search the whole workspace via `findWorkspaceDocs()`, reusing
+      the exact same pure edit-finder functions from `renameTarget.ts`
+      rename already relies on — "renaming to itself" turns an edit-finder
+      into a pure range-finder for free, no parallel implementation needed.
+- [x] Verified via `test-fixtures/check.js`: cross-file result references
+      merge across two *deliberately* ambiguous same-named Task files
+      (the fixture pair the rename ambiguity tests already use) rather
+      than picking one — the one behavior that's the opposite of what
+      rename does for the same input, worth locking in explicitly — plus
+      cross-file task-identity (both the Pipeline-task-entry and TaskRun's
+      own `taskRef` shapes) and pipeline-identity references.
+
 ## Next up
 
-- [ ] Cross-file "Find All References" from a Task's result declaration
-      back to every Pipeline task-result usage across the workspace, and
-      from a Task/Pipeline's own identity to every referencing
-      `taskRef`/`pipelineRef` — `rename.ts`'s `findWorkspaceDocs()` would
-      extend naturally to this.
 - [ ] Diagnostic + quick fix for tasks missing `runAfter` when they
       reference another task's result (implicit vs. explicit ordering).
 - [ ] Publish to the VS Code Marketplace / Open VSX.

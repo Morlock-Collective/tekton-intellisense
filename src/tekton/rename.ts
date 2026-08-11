@@ -11,16 +11,10 @@ import {
   pipelineRefIdentityEdits,
 } from "./renameTarget";
 import { TektonWorkspaceIndex, IndexedResource } from "./workspaceIndex";
+import { findWorkspaceDocs } from "./workspaceScan";
+import { toVscodeRange } from "./rangeUtils";
 
-const YAML_GLOB = "**/*.{yaml,yml}";
-const EXCLUDE_GLOB = "**/{node_modules,.git}/**";
 const PIPELINE_KIND: ReadonlySet<TektonKind> = new Set(["Pipeline"]);
-
-function toVscodeRange(parsed: ParsedTektonDoc, range: [number, number]): vscode.Range {
-  const start = parsed.lineCounter.linePos(range[0]);
-  const end = parsed.lineCounter.linePos(range[1]);
-  return new vscode.Range(start.line - 1, start.col - 1, end.line - 1, end.col - 1);
-}
 
 function addEdits(workspaceEdit: vscode.WorkspaceEdit, uri: vscode.Uri, parsed: ParsedTektonDoc, edits: TextEdit[]): void {
   for (const e of edits) {
@@ -83,31 +77,6 @@ function resolveUnambiguous(candidates: IndexedResource[], name: string, kindLab
     );
   }
   return candidates[0];
-}
-
-async function readFileText(uri: vscode.Uri): Promise<string | undefined> {
-  const open = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri.toString());
-  if (open) return open.getText();
-  try {
-    const bytes = await vscode.workspace.fs.readFile(uri);
-    return Buffer.from(bytes).toString("utf8");
-  } catch {
-    return undefined;
-  }
-}
-
-/** On-demand (not persistently indexed — rename is rare enough to afford a live scan) list of every workspace document of one of `kinds`. */
-async function findWorkspaceDocs(kinds: readonly TektonKind[]): Promise<{ uri: vscode.Uri; parsed: ParsedTektonDoc }[]> {
-  const uris = await vscode.workspace.findFiles(YAML_GLOB, EXCLUDE_GLOB, 5000);
-  const found = await Promise.all(
-    uris.map(async (uri) => {
-      const text = await readFileText(uri);
-      if (text === undefined) return undefined;
-      const parsed = parseTektonDocument(text);
-      return parsed && kinds.includes(parsed.symbols.kind) ? { uri, parsed } : undefined;
-    })
-  );
-  return found.filter((x): x is { uri: vscode.Uri; parsed: ParsedTektonDoc } => !!x);
 }
 
 /**

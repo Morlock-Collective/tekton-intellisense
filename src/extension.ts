@@ -130,7 +130,7 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   context.subscriptions.push(
-    vscode.languages.registerReferenceProvider({ pattern: "**/*.{yaml,yml}" }, new TektonReferenceProvider())
+    vscode.languages.registerReferenceProvider({ pattern: "**/*.{yaml,yml}" }, new TektonReferenceProvider(workspaceIndex))
   );
 
   context.subscriptions.push(

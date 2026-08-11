@@ -1,17 +1,11 @@
 import * as vscode from "vscode";
-import { ParsedTektonDoc, parseTektonDocument } from "./model";
+import { parseTektonDocument } from "./model";
 import { findParamRefs } from "./paramRefs";
 import { TektonWorkspaceIndex } from "./workspaceIndex";
+import { toVscodeRange } from "./rangeUtils";
 
 function localRange(document: vscode.TextDocument, range: [number, number]): vscode.Range {
   return new vscode.Range(document.positionAt(range[0]), document.positionAt(range[1]));
-}
-
-/** Converts an offset range in another (possibly unopened) document's source text into a Range, via its lineCounter. */
-function remoteRange(parsed: ParsedTektonDoc, range: [number, number]): vscode.Range {
-  const start = parsed.lineCounter.linePos(range[0]);
-  const end = parsed.lineCounter.linePos(range[1]);
-  return new vscode.Range(start.line - 1, start.col - 1, end.line - 1, end.col - 1);
 }
 
 /**
@@ -67,7 +61,7 @@ export class TektonDefinitionProvider implements vscode.DefinitionProvider {
           const record = this.workspaceIndex.lookupTaskRecord(task.taskRefName);
           const result = record?.parsed.symbols.results.find((r) => r.name === ref.resultName);
           if (record && result?.range) {
-            return new vscode.Location(record.uri, remoteRange(record.parsed, result.range));
+            return new vscode.Location(record.uri, toVscodeRange(record.parsed, result.range));
           }
           return undefined;
         }
