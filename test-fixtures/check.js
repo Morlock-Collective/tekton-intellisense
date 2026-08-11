@@ -733,16 +733,15 @@ console.log("\naddConditional simulation:");
   }
 }
 
-// --- Find All References: cross-file, and deliberately permissive on ambiguity ---
+// --- Find All References: cross-file, and permissive on ambiguity ---
 //
 // references.ts's TektonReferenceProvider itself needs vscode (workspace
-// scanning, Location objects) and can't run under plain Node. What's
-// tested here is its one genuinely new piece of decision logic: unlike
+// scanning, Location objects) and can't run under plain Node. What's tested
+// here is its one piece of decision logic that differs from rename: unlike
 // rename (which must reject an ambiguous name outright — silently picking
 // one candidate to rewrite risks corrupting the wrong file), find-
-// references is read-only, so on an ambiguous name it searches *every*
-// matching candidate and merges the results — a design choice, not just
-// glue code, so it's worth locking in explicitly.
+// references is read-only, so on an ambiguous name it searches every
+// matching candidate and merges the results.
 
 console.log("\nFind All References: cross-file result, merges every ambiguous candidate:");
 {

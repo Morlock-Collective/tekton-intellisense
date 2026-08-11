@@ -60,36 +60,28 @@ file.
   (cross-file, via the same workspace index completions use). Hovering
   `$(context.*)` shows what the built-in variable means.
 - **Go to Definition / Find All References** — jump from a `$(...)`
-  reference straight to its declaration; for `$(tasks.X.results.Y)`, `Y`
-  resolves cross-file to the actual Task's declared result, even in a file
-  you haven't opened. "Find All References" collects every `$(...)`
-  reference to a param/workspace/task-alias within the current document;
-  for a Task's own result or a Task/Pipeline's own identity
-  (`taskRef`/`pipelineRef`), it searches the whole workspace — and unlike
-  rename, is happy to show references from more than one same-named
-  candidate rather than picking one, since showing an extra location
-  costs a glance, not a rewrite.
+  reference to its declaration; for `$(tasks.X.results.Y)`, `Y` resolves
+  cross-file to the actual Task's declared result, even in a file you
+  haven't opened. References to a Task's result or a Task/Pipeline's own
+  identity (`taskRef`/`pipelineRef`) search the whole workspace, and — since
+  this is read-only — show every matching candidate when a name is
+  ambiguous rather than guessing at one.
 - **Rename (F2)** — params, workspaces, and pipeline task aliases rename
-  within their own file, declaration and every `$(...)` reference together.
-  A Task's declared result, a Task's own identity (`metadata.name`,
-  referenced by a Pipeline task's `taskRef.name` *or* a TaskRun's own
-  `taskRef`), and a Pipeline's own identity (`metadata.name`, referenced by
-  a PipelineRun's `pipelineRef`) all rename **workspace-wide by default** —
-  invoke it from either the declaration or any reference to it, anywhere in
-  the workspace, and everything updates together. If a name is ambiguous
-  (two different Task or Pipeline files sharing a `metadata.name` — a
-  vendored/catalog Task in more than one chart, not a hypothetical), what
-  happens depends on where you invoked it from: on the declaration itself
-  it's unambiguous by construction, so that file renames and cross-file
-  reference updates are skipped with an explicit warning; from a
-  *reference* pointing at an ambiguous name, the rename is rejected
-  outright, since there's no principled way to know which same-named
-  declaration the reference actually means.
-- **Commands** (Command Palette or editor context menu) — all four resolve
-  *where* to insert from the document's structure, not the cursor
-  position, wherever that's well-defined; where it genuinely isn't (which
-  task, which step — there can be several), the cursor is a fast path and a
-  picker is the fallback, never "insert wherever the cursor happens to be":
+  within their own file. A Task's declared result and a Task/Pipeline's own
+  identity (`metadata.name`, referenced by `taskRef`/`pipelineRef`) rename
+  **workspace-wide by default**, invocable from either the declaration or
+  any reference to it. If a name is ambiguous (two files sharing a
+  `metadata.name` — a vendored Task present in more than one chart is a
+  real case, not a hypothetical): renaming the declaration itself still
+  works, since that's unambiguous by construction, but skips cross-file
+  updates with a warning; renaming *from* an ambiguous reference is
+  rejected outright, since there's no way to know which declaration it
+  means.
+- **Commands** (Command Palette or editor context menu) resolve *where* to
+  insert from the document's structure rather than cursor position,
+  wherever that's well-defined; where it genuinely isn't (which task, which
+  step — there can be several), the cursor is a fast path and a picker is
+  the fallback:
   - `Tekton: Add Parameter` — always appends last in the correct list, and
     is resource-aware: Pipeline/Task/ClusterTask/StepAction get a
     declaration (name/type/description/default) under `spec.params`; a
@@ -123,13 +115,12 @@ npm run compile      # or: npm run watch
 ```
 
 Then open this folder in VS Code and press F5 to launch an Extension
-Development Host. There's no `vscode` API dependency in the core parsing
-logic (`src/tekton/model.ts`, `paramRefs.ts`, `levenshtein.ts`,
-`helmMask.ts`, `duplicates.ts`, `commands/snippetText.ts`), so it can be
-sanity-checked directly with Node — see `test-fixtures/check.js`, which
-also end-to-end-simulates each editing command's output and round-trips it
-through the real `yaml` parser rather than relying on eyeballing the
-editor:
+Development Host. The domain/parsing logic under `src/tekton/` and
+`src/commands/snippetText.ts` has no `vscode` dependency where it doesn't
+need one, so most of it is sanity-checked directly with Node — see
+`test-fixtures/check.js`, which also end-to-end-simulates each editing
+command's output and round-trips it through the real `yaml` parser rather
+than relying on eyeballing the editor:
 
 ```bash
 npm run lint    # eslint

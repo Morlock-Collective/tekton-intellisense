@@ -1,6 +1,13 @@
 import * as vscode from "vscode";
 import { ParsedTektonDoc, parseTektonDocument, TASK_LIKE_KINDS, TektonKind } from "./model";
-import { resolveRenameTarget, sameDocumentEdits, sameDocumentResultEdits, taskResultReferenceEdits, taskRefIdentityEdits, pipelineRefIdentityEdits } from "./renameTarget";
+import {
+  resolveRenameTarget,
+  sameDocumentEdits,
+  sameDocumentResultEdits,
+  taskResultReferenceEdits,
+  taskRefIdentityEdits,
+  pipelineRefIdentityEdits,
+} from "./renameTarget";
 import { TektonWorkspaceIndex, IndexedResource } from "./workspaceIndex";
 import { findWorkspaceDocs } from "./workspaceScan";
 import { toVscodeRange } from "./rangeUtils";
@@ -32,14 +39,11 @@ function dedupe(locations: vscode.Location[]): vscode.Location[] {
 
 /**
  * "Find All References" (Shift+F12). Same-document entities (params,
- * workspaces, pipeline task aliases) are scoped to the current file — they
- * genuinely can't be referenced from anywhere else. A Task's own result and
- * a Task/Pipeline's own identity search the whole workspace, mirroring
- * exactly what `rename.ts` resolves for the same targets — except where
- * rename must reject an ambiguous name (renaming the wrong file would
- * corrupt it), a read-only "find references" is free to just search every
- * candidate and merge the results, since showing an extra, obviously-
- * unrelated location costs the user a glance, not a broken file.
+ * workspaces, task aliases) are scoped to the current file. A Task's own
+ * result and a Task/Pipeline's own identity search the whole workspace,
+ * resolving the same targets `rename.ts` does — except an ambiguous name
+ * is searched across every candidate and merged rather than rejected,
+ * since this is read-only.
  */
 export class TektonReferenceProvider implements vscode.ReferenceProvider {
   constructor(private readonly workspaceIndex: TektonWorkspaceIndex) {}

@@ -9,36 +9,32 @@ export interface IndexedResource {
   parsed: ParsedTektonDoc;
 }
 
-/** name -> (uri string -> indexed resource), so two files sharing a name never clobber each other's entry — see {@link TektonWorkspaceIndex}. */
+/**
+ * name -> (uri -> record). Two levels deep, not flat by name, so that two
+ * files declaring the same `metadata.name` (a vendored Task present in
+ * more than one chart, say) don't clobber each other: re-indexing or
+ * removing one file only ever touches its own entry.
+ */
 type NameIndex = Map<string, Map<string, IndexedResource>>;
 
 /**
- * A lightweight workspace-wide index of Task/ClusterTask/StepAction and
- * Pipeline resources, each keyed by their own `metadata.name` (i.e. the
- * name a `taskRef`/`pipelineRef` points at — usually different from the
- * local `name:` a Pipeline gives that task in `spec.tasks[]`). This is what
- * lets completions for `$(tasks.X.results.Y)` resolve `Y` against the
- * actual Task `X` refers to, and rename resolve cross-file references for
- * both Tasks and Pipelines, even when defined in a different file — the
- * common case in Helm charts that split resources across templates.
+ * Workspace-wide index of Task/ClusterTask/StepAction and Pipeline
+ * resources, each keyed by their own `metadata.name` — the name a
+ * `taskRef`/`pipelineRef` points at, usually different from the local
+ * `name:` a Pipeline gives that task in `spec.tasks[]`. Lets completions
+ * resolve `$(tasks.X.results.Y)` against the actual Task `X` refers to,
+ * and rename/references resolve cross-file, even when defined in a
+ * different file (the common Helm-chart layout).
  *
- * Deliberately simple: no persistence, no incremental AST diffing, just a
- * name -> symbols map rebuilt per changed file, kept current via a file
- * watcher plus live re-indexing of open (possibly unsaved) documents.
+ * No persistence, no incremental AST diffing — just a name -> symbols map
+ * rebuilt per changed file, kept current via a file watcher plus live
+ * re-indexing of open (possibly unsaved) documents.
  *
- * Tasks and Pipelines are kept in two separate name indexes (not merged
- * into one map keyed by name) — a Task and a Pipeline coincidentally
- * sharing a name isn't actually ambiguous, since `taskRef` and
- * `pipelineRef` are resolved independently, and merging them would invent
- * a collision that doesn't exist.
+ * Tasks and Pipelines get separate name indexes rather than one shared
+ * map: a Task and Pipeline coincidentally sharing a name isn't actually
+ * ambiguous, since `taskRef`/`pipelineRef` resolve independently.
  */
 export class TektonWorkspaceIndex implements vscode.Disposable {
-  // Two different files declaring the same metadata.name (e.g. a
-  // vendored/catalog Task like "git-clone" present in more than one chart)
-  // is a real, non-hypothetical occurrence — each name index is keyed two
-  // levels deep (name -> uri -> record) specifically so re-indexing or
-  // removing one file only ever touches its own entry, never another
-  // file's entry that happens to share the same name.
   private readonly byTaskName: NameIndex = new Map();
   private readonly byPipelineName: NameIndex = new Map();
   private readonly taskNameByUri = new Map<string, string>();

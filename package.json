@@ -87,11 +87,6 @@
           "type": "boolean",
           "default": true,
           "description": "Validate $(...) references against declared params/workspaces/results/tasks."
-        },
-        "tektonAid.helmAware": {
-          "type": "boolean",
-          "default": true,
-          "description": "Mask Helm/Go-template expressions ({{ ... }}) before YAML parsing so charts under templates/ don't produce false positives."
         }
       }
     }

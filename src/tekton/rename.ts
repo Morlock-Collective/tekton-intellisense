@@ -46,7 +46,7 @@ function declListFor(parsed: ParsedTektonDoc, kind: SameDocKind) {
   }
 }
 
-/** Throws if `newName` is already used by a *different* entity of the same kind in the same document — an unambiguous, always-a-mistake collision (Tekton/Kubernetes schema validation would reject it outright). */
+/** Throws if `newName` is already used by a different entity of the same kind in the same document — schema validation would reject the collision anyway. */
 function assertNoLocalCollision(parsed: ParsedTektonDoc, kind: SameDocKind, oldName: string, newName: string): void {
   if (oldName === newName) return;
   const label = kind === "task-alias" ? "task" : kind;
@@ -56,16 +56,10 @@ function assertNoLocalCollision(parsed: ParsedTektonDoc, kind: SameDocKind, oldN
 }
 
 /**
- * Resolves a name to exactly one workspace record, or throws. Used
- * whenever the record is being resolved *from a reference* rather than
- * from sitting directly on the declaration: if the name is ambiguous (more
- * than one file declares it), there is no principled way to know which
- * declaration the reference actually means — Tekton itself can't tell them
- * apart by name alone either — so renaming would either have to guess (and
- * risk silently rewriting the wrong file while leaving the very reference
- * that was clicked unchanged, since a name that's ambiguous when resolving
- * *to* a declaration is equally ambiguous when resolving *from* it back to
- * other references) or, as here, refuse outright and say why.
+ * Resolves a name to exactly one workspace record, or throws. Used when
+ * resolving *from a reference* (not the declaration): an ambiguous name
+ * can't be resolved to a single target, and guessing risks rewriting the
+ * wrong file while leaving the clicked reference unchanged.
  */
 function resolveUnambiguous(candidates: IndexedResource[], name: string, kindLabel: string): IndexedResource {
   if (candidates.length === 0) {
@@ -73,26 +67,20 @@ function resolveUnambiguous(candidates: IndexedResource[], name: string, kindLab
   }
   if (candidates.length > 1) {
     throw new Error(
-      `Tekton Aid: can't rename — "${name}" is declared by ${candidates.length} different ${kindLabel} files in this workspace, and it's ambiguous which one this reference means. Rename the declaration directly instead, or make the name unique first.`
+      `Tekton Aid: can't rename — "${name}" is declared by ${candidates.length} different ${kindLabel} files, so it's ambiguous which one this reference means. Rename the declaration directly, or make the name unique first.`
     );
   }
   return candidates[0];
 }
 
 /**
- * "Go to Definition"'s F2 counterpart. Same-document entities (params,
- * workspaces, pipeline task aliases) rename in isolation. A Task's own
- * result, a Task's own identity (`metadata.name`, referenced by a
- * Pipeline's per-task `taskRef.name` or a TaskRun's own `spec.taskRef`),
- * and a Pipeline's own identity (referenced by a PipelineRun's
- * `spec.pipelineRef`) can be referenced from other files and get a
- * workspace-wide rename by default — but only when the name being renamed
- * unambiguously belongs to one file. If multiple files share a name (a
- * vendored/catalog Task present in more than one chart is a normal
- * occurrence, not a hypothetical), blindly rewriting every reference to
- * that name workspace-wide could silently repoint references that were
- * actually meant for the *other*, untouched file. In that case this skips
- * the cross-file rewrite and tells the user why, rather than guessing.
+ * F2 rename. Same-document entities (params, workspaces, task aliases)
+ * rename in isolation. A Task's own result and a Task/Pipeline's own
+ * identity (`taskRef`/`pipelineRef`) rename workspace-wide by default,
+ * unless the name is ambiguous (two files sharing a `metadata.name` — a
+ * vendored Task present in more than one chart is a real case), in which
+ * case cross-file updates are skipped with an explanation instead of
+ * guessed.
  */
 export class TektonRenameProvider implements vscode.RenameProvider {
   constructor(private readonly workspaceIndex: TektonWorkspaceIndex) {}
@@ -172,14 +160,14 @@ export class TektonRenameProvider implements vscode.RenameProvider {
 
         if (this.workspaceIndex.lookupAllTaskRecords(newName).length > 0) {
           void vscode.window.showWarningMessage(
-            `Tekton Aid: "${newName}" is already used by another Task file in this workspace. Renamed anyway, but you now have two Tasks sharing a name — taskRef by name won't be able to tell them apart.`
+            `Tekton Aid: "${newName}" is already used by another Task file — you now have two Tasks sharing a name, which taskRef can't tell apart.`
           );
         }
 
         const sameName = this.workspaceIndex.lookupAllTaskRecords(target.name);
         if (sameName.length > 1) {
           void vscode.window.showWarningMessage(
-            `Tekton Aid: "${target.name}" is declared by ${sameName.length} different Task files in this workspace — only the one you renamed from was updated. taskRef references elsewhere were left untouched, since it's ambiguous which Task they actually meant. Update them by hand if needed.`
+            `Tekton Aid: "${target.name}" is declared by ${sameName.length} different Task files — only the one you renamed from was updated. Update taskRef references elsewhere by hand if needed.`
           );
           return edit;
         }
@@ -207,14 +195,14 @@ export class TektonRenameProvider implements vscode.RenameProvider {
 
         if (this.workspaceIndex.lookupAllPipelineRecords(newName).length > 0) {
           void vscode.window.showWarningMessage(
-            `Tekton Aid: "${newName}" is already used by another Pipeline file in this workspace. Renamed anyway, but you now have two Pipelines sharing a name — pipelineRef by name won't be able to tell them apart.`
+            `Tekton Aid: "${newName}" is already used by another Pipeline file — you now have two Pipelines sharing a name, which pipelineRef can't tell apart.`
           );
         }
 
         const sameName = this.workspaceIndex.lookupAllPipelineRecords(target.name);
         if (sameName.length > 1) {
           void vscode.window.showWarningMessage(
-            `Tekton Aid: "${target.name}" is declared by ${sameName.length} different Pipeline files in this workspace — only the one you renamed from was updated. pipelineRef.name references elsewhere were left untouched, since it's ambiguous which Pipeline they actually meant. Update them by hand if needed.`
+            `Tekton Aid: "${target.name}" is declared by ${sameName.length} different Pipeline files — only the one you renamed from was updated. Update pipelineRef references elsewhere by hand if needed.`
           );
           return edit;
         }
@@ -229,13 +217,9 @@ export class TektonRenameProvider implements vscode.RenameProvider {
   }
 
   /**
-   * When F2 is invoked directly on the declaration itself, which file is
-   * meant is unambiguous by construction — it's the one open right now —
-   * regardless of whether some other file happens to declare the same
-   * name (that only affects whether cross-file *reference* updates are
-   * safe, handled separately below). Only when resolving *from a
-   * reference* elsewhere does an ambiguous name become a real problem,
-   * which {@link resolveUnambiguous} rejects outright.
+   * Invoked directly on the declaration, the target file is unambiguous
+   * by construction (it's the one open). Only resolving *from a
+   * reference* makes an ambiguous name a problem — see {@link resolveUnambiguous}.
    */
   private resolveIdentityRecord(
     document: vscode.TextDocument,
@@ -263,7 +247,7 @@ export class TektonRenameProvider implements vscode.RenameProvider {
     const sameName = this.workspaceIndex.lookupAllTaskRecords(taskName);
     if (sameName.length > 1) {
       void vscode.window.showWarningMessage(
-        `Tekton Aid: "${taskName}" is declared by ${sameName.length} different Task files in this workspace — only this file's own $(results.${resultName}...) uses were updated. $(tasks.*.results.${resultName}) references in Pipelines were left untouched, since it's ambiguous which Task they actually meant. Update them by hand if needed.`
+        `Tekton Aid: "${taskName}" is declared by ${sameName.length} different Task files — only this file's own $(results.${resultName}...) uses were updated. Update $(tasks.*.results.${resultName}) references in Pipelines by hand if needed.`
       );
       return;
     }
