@@ -1,0 +1,8 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: build-image
+spec:
+  results:
+    - name: digest
+    - name: image-url

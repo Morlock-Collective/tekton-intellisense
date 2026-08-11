@@ -4,6 +4,8 @@ import { TektonRefCodeActionProvider } from "./tekton/codeActions";
 import { parseTektonDocument } from "./tekton/model";
 import { TektonStatusBar } from "./tekton/statusBar";
 import { updateDecorations, clearDecorations, disposeDecorations } from "./tekton/decorations";
+import { TektonWorkspaceIndex } from "./tekton/workspaceIndex";
+import { TektonRefCompletionProvider } from "./tekton/completions";
 import { bindParamToEnvCommand } from "./commands/bindParamToEnv";
 import { addTaskCommand } from "./commands/addTask";
 import { addConditionalCommand } from "./commands/addConditional";
@@ -48,7 +50,8 @@ function refreshActiveEditorState(editor: vscode.TextEditor | undefined): void {
 export function activate(context: vscode.ExtensionContext): void {
   diagnosticCollection = vscode.languages.createDiagnosticCollection(DIAGNOSTIC_SOURCE);
   statusBar = new TektonStatusBar();
-  context.subscriptions.push(diagnosticCollection, statusBar);
+  const workspaceIndex = new TektonWorkspaceIndex();
+  context.subscriptions.push(diagnosticCollection, statusBar, workspaceIndex);
 
   let debounce: ReturnType<typeof setTimeout> | undefined;
   const scheduleRefresh = (document: vscode.TextDocument) => {
@@ -94,6 +97,14 @@ export function activate(context: vscode.ExtensionContext): void {
       { pattern: "**/*.{yaml,yml}" },
       new TektonRefCodeActionProvider(),
       TektonRefCodeActionProvider.metadata
+    )
+  );
+
+  context.subscriptions.push(
+    vscode.languages.registerCompletionItemProvider(
+      { pattern: "**/*.{yaml,yml}" },
+      new TektonRefCompletionProvider(workspaceIndex),
+      ...TektonRefCompletionProvider.triggerCharacters
     )
   );
 

@@ -42,18 +42,55 @@ features and grow the domain model (params → workspaces → results → tasks 
       parameter — all AST-position-aware (insert after the last existing
       list item, or create the list at cursor indentation).
 
+## Milestone 1.1 — Activation fix + declaration highlighting (done)
+
+The first cut never actually activated in a real window (only ever run via
+F5 debug host) and had two packaging bugs (`contributes.languages`
+re-declaring the built-in `yaml` id; an invalid TextMate injection selector)
+that would have kept it dark even once installed. Fixed both, switched
+diagnostics/completions/code-actions from `languageId === "yaml"` to a file
+pattern selector so other extensions claiming `*.yaml` under a different
+language id don't block us, and added a `tektonAid.active` status-bar/context
+signal so activation is visibly confirmed.
+
+Also replaced the TextMate-scope-based reference highlighting with editor
+decorations using workbench `ThemeColor`s (`symbolIcon.variableForeground`,
+`textLink.foreground`) — grammar scope colors are only as visible as a given
+theme bothers to style them (turned out nearly invisible in practice), while
+workbench colors resolve to a real value under every theme. Declaration
+sites (`name:` fields) are now highlighted too, distinctly from reference
+sites, so the field acting as an identifier is obvious regardless of key
+ordering in the mapping.
+
+## Milestone 1.2 — Context-aware completions (done)
+
+- [x] `src/tekton/completions.ts`: a `CompletionItemProvider` that inspects
+      the unclosed `$(...)` back from the cursor, splits it into typed path
+      segments, and offers exactly the completions valid at that depth: top-
+      level namespaces filtered by document kind (no `tasks.` in a Task, no
+      `results.` in a Pipeline), then declared names, then leaf fields
+      (`workspaces.x.path|claim|volume|bound`, `results.x.path`,
+      `context.pipelineRun.name|namespace|uid`, ...).
+- [x] `src/tekton/workspaceIndex.ts`: a workspace-wide index of
+      Task/ClusterTask/StepAction resources keyed by `metadata.name`, kept
+      current via a file-system watcher plus live re-indexing of open
+      (unsaved) buffers. This is what resolves `$(tasks.X.results.Y)` — `Y`
+      is completed against the *actual* Task `X`'s `taskRef` points at, even
+      when that Task lives in a different file, which is the normal
+      Helm-chart layout (Tasks and Pipelines in separate templates).
+
 ## Known limitations (v0.1)
 
 - Task-level `workspaces: [{name, workspace: <pipeline-workspace-name>}]`
   bindings aren't validated yet — only `$(...)` substitutions are. This is
   a distinct reference kind (a plain field value, not a template
   expression) and needs its own check.
-- Cross-file validation isn't attempted: a Pipeline referencing
-  `$(tasks.foo.results.bar)` is checked for task `foo` existing in the same
-  Pipeline, but `bar` is not checked against `foo`'s actual Task definition
-  (which usually lives in a separate file/chart).
+- The workspace index resolves Tasks by `metadata.name`; a Helm-templated
+  name (e.g. `{{ include "chart.fullname" . }}-build`) masks to a non-
+  matching placeholder, so cross-file result completion silently comes up
+  empty for such charts unless the taskRef itself is also a literal string.
 - No hover/definition-provider yet (e.g. jump from a `$(params.x)` ref to
-  its declaration).
+  its declaration, or hover to see a param's declared type/default).
 - No settings for custom Tekton API group/version allow-list (assumes any
   `tekton.dev/*`).
 
@@ -63,10 +100,9 @@ features and grow the domain model (params → workspaces → results → tasks 
       `spec.workspaces` (Pipeline) — same misspelling-suggestion UX.
 - [ ] Hover provider: hovering a `$(params.x)` shows its declared type/
       description/default.
-- [ ] Definition/references provider for params/workspaces/results.
-- [ ] Workspace-wide indexing so a Task's declared `results`/`params` can
-      be resolved when referenced from a separate Pipeline file (common in
-      Helm charts where Tasks and Pipelines live in different templates).
+- [ ] Definition/references provider for params/workspaces/results, and for
+      `$(tasks.X...)` → jump to the Task definition resolved via
+      `workspaceIndex`.
 - [ ] Diagnostic + quick fix for tasks missing `runAfter` when they
       reference another task's result (implicit vs. explicit ordering).
 - [ ] Publish to the VS Code Marketplace / Open VSX.

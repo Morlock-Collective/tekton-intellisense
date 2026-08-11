@@ -1,0 +1,10 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: build-and-deploy
+spec:
+  tasks:
+    - name: build
+      taskRef:
+        name: build-image
+      params: []

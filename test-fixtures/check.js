@@ -45,3 +45,16 @@ function check(file) {
 
 check("pipeline-typo.yaml");
 check("helm-templated-task.yaml");
+
+// Cross-file completion resolution: tasks.<local>.results.<X> should resolve
+// against the Task that taskRef actually points at, in a *different* file.
+console.log("\ncross-file tasks.X.results.Y completion resolution:");
+const pipeline = parseTektonDocument(fs.readFileSync(path.join(__dirname, "pipeline-crossfile.yaml"), "utf8"));
+const task = parseTektonDocument(fs.readFileSync(path.join(__dirname, "task-build-image.yaml"), "utf8"));
+const localTask = pipeline.symbols.tasks.find((t) => t.name === "build");
+const index = new Map([[task.symbols.metadataName, task.symbols]]);
+const resolved = index.get(localTask.taskRefName);
+console.log(
+  `  tasks.build.taskRef=${localTask.taskRefName} -> results:`,
+  resolved.results.map((r) => r.name)
+);

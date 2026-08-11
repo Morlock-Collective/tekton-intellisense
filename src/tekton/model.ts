@@ -17,19 +17,23 @@ export interface NamedSymbol {
 }
 
 export interface TaskSymbol extends NamedSymbol {
-  /** names of `results` this task is known to produce, if it's an in-file Task */
-  results?: string[];
+  /** the taskRef.name this pipeline task entry points at, if any (may differ from the entry's local `name`) */
+  taskRefName?: string;
 }
 
 export interface TektonSymbols {
   kind: TektonKind;
   apiVersion: string | undefined;
+  /** metadata.name of the resource itself — e.g. what a Task is called for taskRef purposes */
+  metadataName: string | undefined;
   params: NamedSymbol[];
   workspaces: NamedSymbol[];
   results: NamedSymbol[];
   /** pipeline.spec.tasks / spec.finally entries */
   tasks: TaskSymbol[];
 }
+
+export const TASK_LIKE_KINDS: ReadonlySet<TektonKind> = new Set(["Task", "ClusterTask", "StepAction"]);
 
 export interface ParsedTektonDoc {
   doc: Document.Parsed;
@@ -72,7 +76,23 @@ function namedEntries(seq: YAMLSeq | undefined): NamedSymbol[] {
 }
 
 function taskEntries(seq: YAMLSeq | undefined): TaskSymbol[] {
-  return namedEntries(seq);
+  if (!seq) return [];
+  const out: TaskSymbol[] = [];
+  for (const item of seq.items) {
+    const m = mapOf(item);
+    if (!m) continue;
+    const nameNode = m.get("name", true);
+    if (!isScalar(nameNode) || typeof nameNode.value !== "string") continue;
+    const taskRef = mapOf(m.get("taskRef", true));
+    const taskRefNameNode = taskRef?.get("name", true);
+    const taskRefName = isScalar(taskRefNameNode) && typeof taskRefNameNode.value === "string" ? taskRefNameNode.value : undefined;
+    out.push({
+      name: nameNode.value,
+      range: nameNode.range ? [nameNode.range[0], nameNode.range[1]] : undefined,
+      taskRefName,
+    });
+  }
+  return out;
 }
 
 /**
@@ -115,6 +135,11 @@ export function parseTektonDocument(source: string): ParsedTektonDoc | undefined
       ? kindValue
       : "Unknown";
 
+  const metadata = mapOf(root.get("metadata", true));
+  const metadataNameNode = metadata?.get("name", true);
+  const metadataName =
+    isScalar(metadataNameNode) && typeof metadataNameNode.value === "string" ? metadataNameNode.value : undefined;
+
   const spec = mapOf(root.get("spec", true));
 
   const params = namedEntries(seqOf(spec?.get("params", true)));
@@ -131,7 +156,7 @@ export function parseTektonDocument(source: string): ParsedTektonDoc | undefined
     lineCounter,
     text,
     isHelmTemplated,
-    symbols: { kind, apiVersion: apiVersionValue, params, workspaces, results, tasks },
+    symbols: { kind, apiVersion: apiVersionValue, metadataName, params, workspaces, results, tasks },
   };
 }
 

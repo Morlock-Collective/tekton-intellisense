@@ -15,16 +15,27 @@ file.
 
 ## Features
 
-- **Reference highlighting** — `$(params.x)`, `$(workspaces.x.path)`,
-  `$(results.x.path)`, `$(tasks.x.results.y)`, and `$(context...)` get their
-  own syntax scopes via a TextMate grammar injection
-  (`syntaxes/tekton-refs.injection.json`),
-  so themes can color them distinctly from plain YAML strings.
+- **Reference highlighting** — the name inside `$(params.x)`,
+  `$(workspaces.x.path)`, `$(results.x.path)`, `$(tasks.x.results.y)` is
+  decorated distinctly from plain YAML, and so is the `name:` field at the
+  point of declaration (in `spec.params`/`workspaces`/`results`/`tasks`
+  entries) — so it's obvious which key is the identifier even when `name`
+  isn't the first field.
 - **Reference validation** — every `$(...)` reference is checked against the
   document's declared `spec.params`, `spec.workspaces`, `spec.results`, and
   (for Pipelines) `spec.tasks`/`spec.finally` names. Unknown or misspelled
   names get a warning with a "did you mean" suggestion (Levenshtein
   distance) and a quick fix to apply it.
+- **Context-aware completion** — typing `$(params.` (or `workspaces.`,
+  `results.`, `tasks.`, `context.`) suggests exactly what's valid there:
+  declared names for the current document, filtered by resource kind (no
+  `tasks.` inside a Task, no `results.` inside a Pipeline), narrowing to leaf
+  fields once a name is chosen (`workspaces.x.path|claim|volume|bound`,
+  `context.pipelineRun.name|namespace|uid`, ...). `$(tasks.X.results.` is
+  resolved against the *actual* Task `X`'s `taskRef` points at — including
+  across files, via a lightweight workspace-wide index kept current by a
+  file watcher (`src/tekton/workspaceIndex.ts`) — the normal case in Helm
+  charts that split Tasks and Pipelines into separate templates.
 - **Commands** (Command Palette or editor context menu):
   - `Tekton: Bind Parameter to Environment Variable` — pick a declared
     param, name the env var, and it's inserted into the `env:` list of the
