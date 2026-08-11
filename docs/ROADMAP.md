@@ -195,10 +195,6 @@ not yet done.
 
 ## Known limitations (v0.1)
 
-- Task-level `workspaces: [{name, workspace: <pipeline-workspace-name>}]`
-  bindings aren't validated yet — only `$(...)` substitutions are. This is
-  a distinct reference kind (a plain field value, not a template
-  expression) and needs its own check.
 - The workspace index resolves Tasks by `metadata.name`; a Helm-templated
   name (e.g. `{{ include "chart.fullname" . }}-build`) masks to a non-
   matching placeholder, so cross-file result completion/definition silently
@@ -505,10 +501,31 @@ map) and giving it a non-cursor fallback (a picker) instead of failing.
       the indentation bug, re-parsed with the real `yaml` package rather
       than just inspected.
 
+## Milestone 1.12 — Validate task-level workspace bindings (done)
+
+A pipeline task's `workspaces: [{name, workspace}]` entries bind the task's
+own workspace name to one of the Pipeline's declared `spec.workspaces[]` —
+a plain field value, not `$(...)` template syntax, so it needed its own
+extraction and its own check rather than reusing the reference-checking
+machinery.
+
+- [x] `model.ts`: `TaskSymbol` gained `workspaceBindings: TaskWorkspaceBinding[]`,
+      each tracking the binding's local name, its `workspace:` value, and
+      that value's own offset range (for diagnostics).
+- [x] `diagnostics.ts`: `checkTaskWorkspaceBindings()` flags a `workspace:`
+      value that doesn't match any of the Pipeline's declared workspace
+      names, with the same Levenshtein "did you mean" suggestion (and the
+      same quick fix — `codeActions.ts` needed no changes at all, since it
+      already applies any `suggest:` diagnostic code generically regardless
+      of which check produced it).
+- [x] Caught immediately by its own test: `test-fixtures/pipeline-typo.yaml`
+      turned out to already have a live, previously-undetected typo
+      (`shared-workspce` for `shared-workspace`) sitting in the fixture the
+      whole time — a real example of exactly the failure mode this check
+      exists for (invisible until a `PipelineRun` fails at runtime).
+
 ## Next up
 
-- [ ] Validate task-level `workspaces[].workspace` bindings against
-      `spec.workspaces` (Pipeline) — same misspelling-suggestion UX.
 - [ ] Cross-file "Find All References" from a Task's result declaration
       back to every Pipeline task-result usage across the workspace, and
       from a Task/Pipeline's own identity to every referencing

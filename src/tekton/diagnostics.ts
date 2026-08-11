@@ -41,6 +41,46 @@ function checkDuplicateNames(
   return diagnostics;
 }
 
+/**
+ * Flags a pipeline task's `workspaces: [{name, workspace}]` bindings whose
+ * `workspace:` value doesn't match any of the Pipeline's own declared
+ * `spec.workspaces[].name` entries. Distinct from the `$(...)` reference
+ * checks below — this is a plain field value, not template syntax, but the
+ * failure mode (a typo the schema won't catch until `PipelineRun` time) is
+ * the same, so it gets the same warning + suggestion treatment.
+ */
+function checkTaskWorkspaceBindings(document: vscode.TextDocument, symbols: TektonSymbols): vscode.Diagnostic[] {
+  if (symbols.kind !== "Pipeline") return [];
+
+  const names = symbols.workspaces.map((w) => w.name);
+  const diagnostics: vscode.Diagnostic[] = [];
+
+  for (const task of symbols.tasks) {
+    for (const binding of task.workspaceBindings) {
+      if (!binding.workspaceName || !binding.workspaceNameRange) continue;
+      if (names.includes(binding.workspaceName)) continue;
+
+      const suggestion = closestMatch(binding.workspaceName, names);
+      const range = new vscode.Range(
+        offsetToPosition(document, binding.workspaceNameRange[0]),
+        offsetToPosition(document, binding.workspaceNameRange[1])
+      );
+      const diagnostic = new vscode.Diagnostic(
+        range,
+        suggestion
+          ? `Unknown workspace "${binding.workspaceName}". Did you mean "${suggestion}"?`
+          : `Unknown workspace "${binding.workspaceName}". Declared workspaces: ${names.join(", ") || "(none)"}.`,
+        vscode.DiagnosticSeverity.Warning
+      );
+      diagnostic.source = DIAGNOSTIC_SOURCE;
+      if (suggestion) diagnostic.code = `suggest:${suggestion}`;
+      diagnostics.push(diagnostic);
+    }
+  }
+
+  return diagnostics;
+}
+
 function checkRef(
   ref: ParamRef,
   symbols: TektonSymbols
@@ -121,6 +161,7 @@ export function computeDiagnostics(document: vscode.TextDocument): vscode.Diagno
     ...checkDuplicateNames(document, parsed.symbols.workspaces, "workspace"),
     ...checkDuplicateNames(document, parsed.symbols.results, "result"),
     ...checkDuplicateNames(document, parsed.symbols.tasks, "task"),
+    ...checkTaskWorkspaceBindings(document, parsed.symbols),
   ];
 
   const refs = findParamRefs(parsed.text);

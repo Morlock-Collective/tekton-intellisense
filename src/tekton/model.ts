@@ -21,6 +21,17 @@ export interface TaskSymbol extends NamedSymbol {
   taskRefName?: string;
   /** offset range of the taskRef.name scalar itself, for rename edits */
   taskRefNameRange?: [number, number];
+  /** this task entry's own `workspaces: [{name, workspace}]` bindings, mapping the task's local workspace names to the Pipeline's declared ones */
+  workspaceBindings: TaskWorkspaceBinding[];
+}
+
+export interface TaskWorkspaceBinding {
+  /** the name this task calls the workspace within its own steps' $(workspaces.X...) refs */
+  localName: string;
+  /** the `workspace:` field's value — should match a spec.workspaces[].name declared by the Pipeline */
+  workspaceName?: string;
+  /** offset range of the `workspace:` value scalar itself, for diagnostics */
+  workspaceNameRange?: [number, number];
 }
 
 export interface ParamSymbol extends NamedSymbol {
@@ -171,11 +182,21 @@ function resultEntries(seq: YAMLSeq | undefined): ResultSymbol[] {
   return out;
 }
 
+function taskWorkspaceBindings(seq: YAMLSeq | undefined): TaskWorkspaceBinding[] {
+  const out: TaskWorkspaceBinding[] = [];
+  forEachNamedItem(seq, (m, localName) => {
+    const workspaceNode = m.get("workspace", true);
+    out.push({ localName, workspaceName: scalarString(workspaceNode), workspaceNameRange: scalarRange(workspaceNode) });
+  });
+  return out;
+}
+
 function taskEntries(seq: YAMLSeq | undefined): TaskSymbol[] {
   const out: TaskSymbol[] = [];
   forEachNamedItem(seq, (m, name, range) => {
     const taskRef = refNameAndRange(m, "taskRef");
-    out.push({ name, range, taskRefName: taskRef.name, taskRefNameRange: taskRef.range });
+    const workspaceBindings = taskWorkspaceBindings(seqOf(m.get("workspaces", true)));
+    out.push({ name, range, taskRefName: taskRef.name, taskRefNameRange: taskRef.range, workspaceBindings });
   });
   return out;
 }

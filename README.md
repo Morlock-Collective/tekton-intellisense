@@ -30,6 +30,11 @@ file.
   `spec.workspaces`, `spec.results`, or `spec.tasks`/`finally` is flagged as
   an error on every occurrence — the kind of thing the Kubernetes API
   server rejects at apply time anyway.
+- **Task-level workspace binding validation** — a pipeline task's
+  `workspaces: [{name, workspace}]` entries get the same "did you mean"
+  treatment as `$(...)` references when `workspace:` doesn't match any of
+  the Pipeline's declared `spec.workspaces[]` — a plain field value, not
+  template syntax, but the same typo-invisible-until-runtime failure mode.
 - **Context-aware completion** — typing `$(params.` (or `workspaces.`,
   `results.`, `tasks.`, `context.`) suggests exactly what's valid there:
   declared names for the current document, filtered by resource kind (no

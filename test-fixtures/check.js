@@ -95,6 +95,34 @@ function check(file, expectedWarnings) {
 check("pipeline-typo.yaml", 1);
 check("helm-templated-task.yaml", 1);
 
+// Task-level `workspaces: [{name, workspace}]` bindings: the `workspace:`
+// value is a plain field, not $(...) syntax, so it's checked separately
+// from the reference-based checks above — mirrors checkTaskWorkspaceBindings
+// in diagnostics.ts (which can't be called directly from Node; it needs
+// vscode.Diagnostic/vscode.Range).
+console.log("\ntask-level workspace binding check:");
+{
+  const source = fs.readFileSync(path.join(__dirname, "pipeline-typo.yaml"), "utf8");
+  const parsed = parseTektonDocument(source);
+  const names = parsed.symbols.workspaces.map((w) => w.name);
+  const problems = [];
+  for (const task of parsed.symbols.tasks) {
+    for (const binding of task.workspaceBindings) {
+      if (binding.workspaceName && !names.includes(binding.workspaceName)) {
+        problems.push({ task: task.name, workspace: binding.workspaceName, suggestion: closestMatch(binding.workspaceName, names) });
+      }
+    }
+  }
+  console.log("  found:", problems);
+  const ok =
+    problems.length === 1 &&
+    problems[0].task === "build" &&
+    problems[0].workspace === "shared-workspce" &&
+    problems[0].suggestion === "shared-workspace";
+  console.log(`  [${ok ? "PASS" : "FAIL"}] catches the planted "shared-workspce" typo, suggests "shared-workspace", no false positives`);
+  if (!ok) failures++;
+}
+
 console.log("\nduplicate-name check:");
 const dup = parseTektonDocument(fs.readFileSync(path.join(__dirname, "pipeline-duplicates.yaml"), "utf8"));
 let duplicatesFound = 0;
