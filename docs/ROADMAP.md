@@ -79,6 +79,26 @@ ordering in the mapping.
       when that Task lives in a different file, which is the normal
       Helm-chart layout (Tasks and Pipelines in separate templates).
 
+## Milestone 1.3 — Hover provider (done)
+
+- [x] `src/tekton/hover.ts`: hovering either a declaration site (a `name:`
+      value in `spec.params`/`workspaces`/`results`/`tasks`) or a reference
+      site (anywhere inside a `$(...)` expression) shows the same
+      information — type, description, default for params; description/
+      optional for workspaces; description/type for results. Hovering a
+      `$(tasks.X...)` reference or its declaration shows the resolved
+      `taskRef` and, via the workspace index, that Task's actual declared
+      results (or an explicit "not indexed" note if it can't be resolved).
+      Hovering `$(context.*)` shows a short built-in description pulled
+      from `src/tekton/contextVariables.ts`, which is now the single shared
+      source of context-variable data for both hover and completions (was
+      duplicated between the two before this).
+- [x] `model.ts` extraction was widened to keep `type`/`description`/
+      `default` for params, `description`/`optional` for workspaces, and
+      `type`/`description` for results — this is the data the hover cards
+      render, and it's picked up for free by anything else that reads
+      symbols (completions already show it as item detail).
+
 ## Known limitations (v0.1)
 
 - Task-level `workspaces: [{name, workspace: <pipeline-workspace-name>}]`
@@ -89,8 +109,8 @@ ordering in the mapping.
   name (e.g. `{{ include "chart.fullname" . }}-build`) masks to a non-
   matching placeholder, so cross-file result completion silently comes up
   empty for such charts unless the taskRef itself is also a literal string.
-- No hover/definition-provider yet (e.g. jump from a `$(params.x)` ref to
-  its declaration, or hover to see a param's declared type/default).
+- No definition/references provider yet (e.g. jump from a `$(params.x)` ref
+  to its declaration).
 - No settings for custom Tekton API group/version allow-list (assumes any
   `tekton.dev/*`).
 
@@ -98,8 +118,6 @@ ordering in the mapping.
 
 - [ ] Validate task-level `workspaces[].workspace` bindings against
       `spec.workspaces` (Pipeline) — same misspelling-suggestion UX.
-- [ ] Hover provider: hovering a `$(params.x)` shows its declared type/
-      description/default.
 - [ ] Definition/references provider for params/workspaces/results, and for
       `$(tasks.X...)` → jump to the Task definition resolved via
       `workspaceIndex`.

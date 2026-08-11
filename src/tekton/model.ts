@@ -21,14 +21,31 @@ export interface TaskSymbol extends NamedSymbol {
   taskRefName?: string;
 }
 
+export interface ParamSymbol extends NamedSymbol {
+  type?: string;
+  description?: string;
+  /** stringified default value (arrays/objects are JSON-rendered) */
+  default?: string;
+}
+
+export interface WorkspaceSymbol extends NamedSymbol {
+  description?: string;
+  optional?: boolean;
+}
+
+export interface ResultSymbol extends NamedSymbol {
+  type?: string;
+  description?: string;
+}
+
 export interface TektonSymbols {
   kind: TektonKind;
   apiVersion: string | undefined;
   /** metadata.name of the resource itself — e.g. what a Task is called for taskRef purposes */
   metadataName: string | undefined;
-  params: NamedSymbol[];
-  workspaces: NamedSymbol[];
-  results: NamedSymbol[];
+  params: ParamSymbol[];
+  workspaces: WorkspaceSymbol[];
+  results: ResultSymbol[];
   /** pipeline.spec.tasks / spec.finally entries */
   tasks: TaskSymbol[];
 }
@@ -57,41 +74,86 @@ function mapOf(node: unknown): YAMLMap | undefined {
   return isMap(node) ? node : undefined;
 }
 
-/** Extracts {name: ...} entries from a YAML sequence of maps, keeping source ranges for the name scalar. */
-function namedEntries(seq: YAMLSeq | undefined): NamedSymbol[] {
-  if (!seq) return [];
-  const out: NamedSymbol[] = [];
-  for (const item of seq.items) {
-    const m = mapOf(item);
-    if (!m) continue;
-    const nameNode = m.get("name", true);
-    if (isScalar(nameNode) && typeof nameNode.value === "string") {
-      out.push({
-        name: nameNode.value,
-        range: nameNode.range ? [nameNode.range[0], nameNode.range[1]] : undefined,
-      });
-    }
-  }
-  return out;
+function scalarString(node: unknown): string | undefined {
+  return isScalar(node) && typeof node.value === "string" ? node.value : undefined;
 }
 
-function taskEntries(seq: YAMLSeq | undefined): TaskSymbol[] {
-  if (!seq) return [];
-  const out: TaskSymbol[] = [];
+function scalarBoolean(node: unknown): boolean | undefined {
+  return isScalar(node) && typeof node.value === "boolean" ? node.value : undefined;
+}
+
+/** Renders a default value node (scalar, sequence, or mapping) as display text. */
+function displayValue(node: unknown): string | undefined {
+  if (node === undefined) return undefined;
+  if (isScalar(node)) return node.value == null ? undefined : String(node.value);
+  if (isSeq(node) || isMap(node)) {
+    try {
+      return JSON.stringify(node.toJSON());
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+/** Iterates {name: ...} entries in a YAML sequence of maps, keeping source ranges for the name scalar. */
+function forEachNamedItem(seq: YAMLSeq | undefined, cb: (m: YAMLMap, name: string, range?: [number, number]) => void): void {
+  if (!seq) return;
   for (const item of seq.items) {
     const m = mapOf(item);
     if (!m) continue;
     const nameNode = m.get("name", true);
     if (!isScalar(nameNode) || typeof nameNode.value !== "string") continue;
-    const taskRef = mapOf(m.get("taskRef", true));
-    const taskRefNameNode = taskRef?.get("name", true);
-    const taskRefName = isScalar(taskRefNameNode) && typeof taskRefNameNode.value === "string" ? taskRefNameNode.value : undefined;
-    out.push({
-      name: nameNode.value,
-      range: nameNode.range ? [nameNode.range[0], nameNode.range[1]] : undefined,
-      taskRefName,
-    });
+    cb(m, nameNode.value, nameNode.range ? [nameNode.range[0], nameNode.range[1]] : undefined);
   }
+}
+
+function paramEntries(seq: YAMLSeq | undefined): ParamSymbol[] {
+  const out: ParamSymbol[] = [];
+  forEachNamedItem(seq, (m, name, range) => {
+    out.push({
+      name,
+      range,
+      type: scalarString(m.get("type", true)),
+      description: scalarString(m.get("description", true)),
+      default: displayValue(m.get("default", true)),
+    });
+  });
+  return out;
+}
+
+function workspaceEntries(seq: YAMLSeq | undefined): WorkspaceSymbol[] {
+  const out: WorkspaceSymbol[] = [];
+  forEachNamedItem(seq, (m, name, range) => {
+    out.push({
+      name,
+      range,
+      description: scalarString(m.get("description", true)),
+      optional: scalarBoolean(m.get("optional", true)),
+    });
+  });
+  return out;
+}
+
+function resultEntries(seq: YAMLSeq | undefined): ResultSymbol[] {
+  const out: ResultSymbol[] = [];
+  forEachNamedItem(seq, (m, name, range) => {
+    out.push({
+      name,
+      range,
+      type: scalarString(m.get("type", true)),
+      description: scalarString(m.get("description", true)),
+    });
+  });
+  return out;
+}
+
+function taskEntries(seq: YAMLSeq | undefined): TaskSymbol[] {
+  const out: TaskSymbol[] = [];
+  forEachNamedItem(seq, (m, name, range) => {
+    const taskRef = mapOf(m.get("taskRef", true));
+    out.push({ name, range, taskRefName: scalarString(taskRef?.get("name", true)) });
+  });
   return out;
 }
 
@@ -142,9 +204,9 @@ export function parseTektonDocument(source: string): ParsedTektonDoc | undefined
 
   const spec = mapOf(root.get("spec", true));
 
-  const params = namedEntries(seqOf(spec?.get("params", true)));
-  const workspaces = namedEntries(seqOf(spec?.get("workspaces", true)));
-  const results = namedEntries(seqOf(spec?.get("results", true)));
+  const params = paramEntries(seqOf(spec?.get("params", true)));
+  const workspaces = workspaceEntries(seqOf(spec?.get("workspaces", true)));
+  const results = resultEntries(seqOf(spec?.get("results", true)));
 
   const tasks = [
     ...taskEntries(seqOf(spec?.get("tasks", true))),

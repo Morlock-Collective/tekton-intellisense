@@ -1,15 +1,7 @@
 import * as vscode from "vscode";
 import { parseTektonDocument, ParsedTektonDoc } from "./model";
 import { TektonWorkspaceIndex } from "./workspaceIndex";
-
-/** context.<a>.<b> — mirrors https://tekton.dev/docs/pipelines/variables/#variables-available-in-a-task */
-const CONTEXT_TREE: Record<string, string[]> = {
-  pipeline: ["name"],
-  pipelineRun: ["name", "namespace", "uid"],
-  pipelineTask: ["retries"],
-  task: ["name", "retry-count"],
-  taskRun: ["name", "namespace", "uid"],
-};
+import { CONTEXT_TREE } from "./contextVariables";
 
 const WORKSPACE_FIELDS = ["path", "claim", "volume", "bound"];
 const RESULT_FIELDS = ["path"];
@@ -148,7 +140,7 @@ export class TektonRefCompletionProvider implements vscode.CompletionItemProvide
       }
       if (segments.length === 2) {
         const leaves = CONTEXT_TREE[segments[1]] ?? [];
-        return leaves.map((l) => item(l, replaceRange, vscode.CompletionItemKind.Property, "context field"));
+        return leaves.map((l) => item(l.key, replaceRange, vscode.CompletionItemKind.Property, l.description));
       }
     }
 

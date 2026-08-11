@@ -6,9 +6,11 @@ spec:
   params:
     - name: deploy-env
       type: string
+      description: Target environment to deploy to.
       default: staging
     - name: image-repo
       type: string
+      description: Docker repository to push the built image to.
   workspaces:
     - name: shared-workspace
   tasks:

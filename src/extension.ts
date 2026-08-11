@@ -6,6 +6,7 @@ import { TektonStatusBar } from "./tekton/statusBar";
 import { updateDecorations, clearDecorations, disposeDecorations } from "./tekton/decorations";
 import { TektonWorkspaceIndex } from "./tekton/workspaceIndex";
 import { TektonRefCompletionProvider } from "./tekton/completions";
+import { TektonHoverProvider } from "./tekton/hover";
 import { bindParamToEnvCommand } from "./commands/bindParamToEnv";
 import { addTaskCommand } from "./commands/addTask";
 import { addConditionalCommand } from "./commands/addConditional";
@@ -106,6 +107,10 @@ export function activate(context: vscode.ExtensionContext): void {
       new TektonRefCompletionProvider(workspaceIndex),
       ...TektonRefCompletionProvider.triggerCharacters
     )
+  );
+
+  context.subscriptions.push(
+    vscode.languages.registerHoverProvider({ pattern: "**/*.{yaml,yml}" }, new TektonHoverProvider(workspaceIndex))
   );
 
   context.subscriptions.push(

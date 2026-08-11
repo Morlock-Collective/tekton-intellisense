@@ -36,6 +36,13 @@ file.
   across files, via a lightweight workspace-wide index kept current by a
   file watcher (`src/tekton/workspaceIndex.ts`) — the normal case in Helm
   charts that split Tasks and Pipelines into separate templates.
+- **Hover info** — hovering a declaration (`name:` in `spec.params`/
+  `workspaces`/`results`/`tasks`) or any `$(...)` reference to it shows the
+  same card: type/description/default for params, description/optional for
+  workspaces, description/type for results. Hovering `$(tasks.X...)` or its
+  declaration shows the resolved `taskRef` and that Task's actual results
+  (cross-file, via the same workspace index completions use). Hovering
+  `$(context.*)` shows what the built-in variable means.
 - **Commands** (Command Palette or editor context menu):
   - `Tekton: Bind Parameter to Environment Variable` — pick a declared
     param, name the env var, and it's inserted into the `env:` list of the
