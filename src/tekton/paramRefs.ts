@@ -30,6 +30,9 @@ export interface ParamRef {
   /** offset range of just `name` within raw, for precise diagnostic squiggles */
   nameStart?: number;
   nameEnd?: number;
+  /** for task-result refs: offset range of just `resultName` within raw */
+  resultNameStart?: number;
+  resultNameEnd?: number;
 }
 
 function stripIndex(part: string): string {
@@ -112,6 +115,7 @@ function classify(inner: string, matchStart: number): ParamRef {
     const name = stripIndex(parts[1]);
     const resultName = stripIndex(parts[3]);
     const nameOffsetInInner = "tasks.".length;
+    const resultOffsetInInner = `tasks.${parts[1]}.results.`.length;
     return {
       raw,
       start: matchStart,
@@ -121,6 +125,8 @@ function classify(inner: string, matchStart: number): ParamRef {
       resultName,
       nameStart: matchStart + 2 + nameOffsetInInner,
       nameEnd: matchStart + 2 + nameOffsetInInner + name.length,
+      resultNameStart: matchStart + 2 + resultOffsetInInner,
+      resultNameEnd: matchStart + 2 + resultOffsetInInner + resultName.length,
     };
   }
 

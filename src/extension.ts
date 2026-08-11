@@ -3,6 +3,7 @@ import { computeDiagnostics, DIAGNOSTIC_SOURCE } from "./tekton/diagnostics";
 import { TektonRefCodeActionProvider } from "./tekton/codeActions";
 import { parseTektonDocument } from "./tekton/model";
 import { TektonStatusBar } from "./tekton/statusBar";
+import { updateDecorations, clearDecorations, disposeDecorations } from "./tekton/decorations";
 import { bindParamToEnvCommand } from "./commands/bindParamToEnv";
 import { addTaskCommand } from "./commands/addTask";
 import { addConditionalCommand } from "./commands/addConditional";
@@ -35,11 +36,13 @@ function refreshActiveEditorState(editor: vscode.TextEditor | undefined): void {
   if (!editor || !looksLikeYaml(editor.document)) {
     statusBar.update(undefined, false);
     void vscode.commands.executeCommand("setContext", "tektonAid.active", false);
+    if (editor) clearDecorations(editor);
     return;
   }
   const parsed = parseTektonDocument(editor.document.getText());
   statusBar.update(parsed?.symbols.kind, parsed?.isHelmTemplated ?? false);
   void vscode.commands.executeCommand("setContext", "tektonAid.active", !!parsed);
+  updateDecorations(editor, parsed);
 }
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -105,4 +108,5 @@ export function activate(context: vscode.ExtensionContext): void {
 export function deactivate(): void {
   diagnosticCollection?.dispose();
   statusBar?.dispose();
+  disposeDecorations();
 }
