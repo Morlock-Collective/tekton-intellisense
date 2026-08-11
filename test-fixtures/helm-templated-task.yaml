@@ -1,0 +1,19 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: {{ include "mychart.fullname" . }}-build
+  labels:
+    {{- include "mychart.labels" . | nindent 4 }}
+spec:
+  params:
+    - name: image
+      type: string
+  results:
+    - name: digest
+      description: image digest
+  steps:
+    - name: build
+      image: "{{ .Values.builderImage }}:{{ .Values.builderTag }}"
+      script: |
+        build --tag $(params.image)
+        echo -n "$(results.dgiest.path)" > /tekton/results/digest

@@ -1,0 +1,138 @@
+/**
+ * Finds and classifies Tekton variable references of the form `$(...)`.
+ * Reference: https://tekton.dev/docs/pipelines/variables/
+ */
+
+// $( ... ) where the body is dots/word-chars/hyphens/brackets/stars, no nested parens.
+const REF_PATTERN = /\$\(([a-zA-Z0-9_.\-\[\]*]+)\)/g;
+
+export type RefKind =
+  | "param"
+  | "workspace"
+  | "result"
+  | "task-result"
+  | "context"
+  | "resource"
+  | "unknown";
+
+export interface ParamRef {
+  /** full match, e.g. "$(params.foo)" */
+  raw: string;
+  /** offset of the full match start in the (possibly masked) document text */
+  start: number;
+  /** offset of the full match end */
+  end: number;
+  kind: RefKind;
+  /** the primary name being referenced (param name, workspace name, task name, ...) */
+  name?: string;
+  /** for task-result refs: the result name on the referenced task */
+  resultName?: string;
+  /** offset range of just `name` within raw, for precise diagnostic squiggles */
+  nameStart?: number;
+  nameEnd?: number;
+}
+
+function stripIndex(part: string): string {
+  return part.replace(/\[[^\]]*\]$/, "");
+}
+
+function classify(inner: string, matchStart: number): ParamRef {
+  const raw = `$(${inner})`;
+  const end = matchStart + raw.length;
+  const parts = inner.split(".");
+  const head = parts[0];
+
+  // $(context.pipeline.name), $(context.pipelineRun.uid), $(context.task.name), ...
+  if (head === "context") {
+    return { raw, start: matchStart, end, kind: "context" };
+  }
+
+  // $(params.NAME) / $(params.NAME[*]) / $(params.NAME[0])
+  if (head === "params" && parts.length >= 2) {
+    const name = stripIndex(parts[1]);
+    const nameOffsetInInner = "params.".length;
+    return {
+      raw,
+      start: matchStart,
+      end,
+      kind: "param",
+      name,
+      nameStart: matchStart + 2 + nameOffsetInInner,
+      nameEnd: matchStart + 2 + nameOffsetInInner + name.length,
+    };
+  }
+
+  // legacy: $(inputs.params.NAME) / $(outputs.resources.NAME...)
+  if ((head === "inputs" || head === "outputs") && parts[1] === "params" && parts.length >= 3) {
+    const name = stripIndex(parts[2]);
+    const prefix = `${head}.params.`;
+    return {
+      raw,
+      start: matchStart,
+      end,
+      kind: "param",
+      name,
+      nameStart: matchStart + 2 + prefix.length,
+      nameEnd: matchStart + 2 + prefix.length + name.length,
+    };
+  }
+
+  // $(workspaces.NAME.path|claimName|volume|bound)
+  if (head === "workspaces" && parts.length >= 2) {
+    const name = stripIndex(parts[1]);
+    const nameOffsetInInner = "workspaces.".length;
+    return {
+      raw,
+      start: matchStart,
+      end,
+      kind: "workspace",
+      name,
+      nameStart: matchStart + 2 + nameOffsetInInner,
+      nameEnd: matchStart + 2 + nameOffsetInInner + name.length,
+    };
+  }
+
+  // $(results.NAME.path) -- a Task referring to its own declared result
+  if (head === "results" && parts.length >= 2) {
+    const name = stripIndex(parts[1]);
+    const nameOffsetInInner = "results.".length;
+    return {
+      raw,
+      start: matchStart,
+      end,
+      kind: "result",
+      name,
+      nameStart: matchStart + 2 + nameOffsetInInner,
+      nameEnd: matchStart + 2 + nameOffsetInInner + name.length,
+    };
+  }
+
+  // $(tasks.TASKNAME.results.RESULTNAME) -- a Pipeline referring to another task's result
+  if (head === "tasks" && parts.length >= 4 && parts[2] === "results") {
+    const name = stripIndex(parts[1]);
+    const resultName = stripIndex(parts[3]);
+    const nameOffsetInInner = "tasks.".length;
+    return {
+      raw,
+      start: matchStart,
+      end,
+      kind: "task-result",
+      name,
+      resultName,
+      nameStart: matchStart + 2 + nameOffsetInInner,
+      nameEnd: matchStart + 2 + nameOffsetInInner + name.length,
+    };
+  }
+
+  return { raw, start: matchStart, end, kind: "unknown" };
+}
+
+export function findParamRefs(text: string): ParamRef[] {
+  const refs: ParamRef[] = [];
+  let m: RegExpExecArray | null;
+  REF_PATTERN.lastIndex = 0;
+  while ((m = REF_PATTERN.exec(text)) !== null) {
+    refs.push(classify(m[1], m.index));
+  }
+  return refs;
+}

@@ -1,0 +1,72 @@
+{
+  "scopeName": "tekton.refs.injection",
+  "injectionSelector": "L:source.yaml -comment",
+  "patterns": [
+    { "include": "#tekton-param-ref" }
+  ],
+  "repository": {
+    "tekton-param-ref": {
+      "patterns": [
+        {
+          "name": "meta.tekton.ref.param.yaml",
+          "match": "(\\$\\()(params|inputs\\.params|outputs\\.params)(\\.)([A-Za-z0-9_-]+)((?:\\.[A-Za-z0-9_-]+|\\[[^\\]]*\\])*)(\\))",
+          "captures": {
+            "1": { "name": "punctuation.definition.tekton.ref.begin.yaml" },
+            "2": { "name": "keyword.other.tekton.ref.kind.yaml" },
+            "3": { "name": "punctuation.separator.tekton.ref.yaml" },
+            "4": { "name": "variable.parameter.tekton.param-name.yaml" },
+            "5": { "name": "punctuation.accessor.tekton.ref.yaml" },
+            "6": { "name": "punctuation.definition.tekton.ref.end.yaml" }
+          }
+        },
+        {
+          "name": "meta.tekton.ref.workspace.yaml",
+          "match": "(\\$\\()(workspaces)(\\.)([A-Za-z0-9_-]+)((?:\\.[A-Za-z0-9_-]+)*)(\\))",
+          "captures": {
+            "1": { "name": "punctuation.definition.tekton.ref.begin.yaml" },
+            "2": { "name": "keyword.other.tekton.ref.kind.yaml" },
+            "3": { "name": "punctuation.separator.tekton.ref.yaml" },
+            "4": { "name": "variable.other.tekton.workspace-name.yaml" },
+            "5": { "name": "punctuation.accessor.tekton.ref.yaml" },
+            "6": { "name": "punctuation.definition.tekton.ref.end.yaml" }
+          }
+        },
+        {
+          "name": "meta.tekton.ref.task-result.yaml",
+          "match": "(\\$\\()(tasks)(\\.)([A-Za-z0-9_-]+)(\\.results\\.)([A-Za-z0-9_-]+)(\\))",
+          "captures": {
+            "1": { "name": "punctuation.definition.tekton.ref.begin.yaml" },
+            "2": { "name": "keyword.other.tekton.ref.kind.yaml" },
+            "3": { "name": "punctuation.separator.tekton.ref.yaml" },
+            "4": { "name": "variable.other.tekton.task-name.yaml" },
+            "5": { "name": "punctuation.accessor.tekton.ref.yaml" },
+            "6": { "name": "variable.other.tekton.result-name.yaml" },
+            "7": { "name": "punctuation.definition.tekton.ref.end.yaml" }
+          }
+        },
+        {
+          "name": "meta.tekton.ref.result.yaml",
+          "match": "(\\$\\()(results)(\\.)([A-Za-z0-9_-]+)((?:\\.[A-Za-z0-9_-]+)*)(\\))",
+          "captures": {
+            "1": { "name": "punctuation.definition.tekton.ref.begin.yaml" },
+            "2": { "name": "keyword.other.tekton.ref.kind.yaml" },
+            "3": { "name": "punctuation.separator.tekton.ref.yaml" },
+            "4": { "name": "variable.other.tekton.result-name.yaml" },
+            "5": { "name": "punctuation.accessor.tekton.ref.yaml" },
+            "6": { "name": "punctuation.definition.tekton.ref.end.yaml" }
+          }
+        },
+        {
+          "name": "meta.tekton.ref.context.yaml",
+          "match": "(\\$\\()(context)((?:\\.[A-Za-z0-9_-]+)*)(\\))",
+          "captures": {
+            "1": { "name": "punctuation.definition.tekton.ref.begin.yaml" },
+            "2": { "name": "keyword.other.tekton.ref.kind.yaml" },
+            "3": { "name": "variable.language.tekton.context.yaml" },
+            "4": { "name": "punctuation.definition.tekton.ref.end.yaml" }
+          }
+        }
+      ]
+    }
+  }
+}

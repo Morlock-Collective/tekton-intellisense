@@ -1,0 +1,35 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: build-and-deploy
+spec:
+  params:
+    - name: deploy-env
+      type: string
+      default: staging
+    - name: image-repo
+      type: string
+  workspaces:
+    - name: shared-workspace
+  tasks:
+    - name: build
+      taskRef:
+        name: build-image
+      params:
+        - name: repo
+          value: $(params.image-rpeo)
+      workspaces:
+        - name: source
+          workspace: shared-workspce
+    - name: deploy
+      taskRef:
+        name: deploy-app
+      runAfter:
+        - build
+      params:
+        - name: image-digest
+          value: $(tasks.buidl.results.digest)
+      when:
+        - input: "$(params.deploy-env)"
+          operator: in
+          values: ["production"]
