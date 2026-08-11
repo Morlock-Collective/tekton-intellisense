@@ -9,16 +9,16 @@ retype constantly.
 
 It is Helm-aware: charts that keep Tekton resources under `templates/` with
 `{{ ... }}` actions are parsed by masking template actions in place (see
-[`src/tekton/helmMask.ts`](src/tekton/helmMask.ts)) rather than requiring a
-rendered chart, so line/column positions in diagnostics always point at your
-actual source file.
+`src/tekton/helmMask.ts`) rather than requiring a rendered chart, so
+line/column positions in diagnostics always point at your actual source
+file.
 
 ## Features
 
 - **Reference highlighting** — `$(params.x)`, `$(workspaces.x.path)`,
   `$(results.x.path)`, `$(tasks.x.results.y)`, and `$(context...)` get their
   own syntax scopes via a TextMate grammar injection
-  ([`syntaxes/tekton-refs.injection.json`](syntaxes/tekton-refs.injection.json)),
+  (`syntaxes/tekton-refs.injection.json`),
   so themes can color them distinctly from plain YAML strings.
 - **Reference validation** — every `$(...)` reference is checked against the
   document's declared `spec.params`, `spec.workspaces`, `spec.results`, and
@@ -55,7 +55,7 @@ Then open this folder in VS Code and press F5 to launch an Extension
 Development Host. There's no `vscode` API dependency in the core parsing
 logic (`src/tekton/model.ts`, `paramRefs.ts`, `levenshtein.ts`,
 `helmMask.ts`), so it can be sanity-checked directly with Node — see
-[`test-fixtures/check.js`](test-fixtures/check.js):
+`test-fixtures/check.js`:
 
 ```bash
 npm run compile && node test-fixtures/check.js
@@ -63,7 +63,7 @@ npm run compile && node test-fixtures/check.js
 
 ## Status
 
-Early and actively growing — see [`docs/ROADMAP.md`](docs/ROADMAP.md) for
+Early and actively growing — see `docs/ROADMAP.md` for
 what's implemented and what's next.
 
 ## References

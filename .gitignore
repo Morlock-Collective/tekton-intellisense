@@ -1,4 +1,4 @@
-out/
 node_modules/
-*.vsix
+out/
 .vscode-test/
+*.vsix

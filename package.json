@@ -22,16 +22,12 @@
   ],
   "activationEvents": [
     "onLanguage:yaml",
-    "onLanguage:helm"
+    "onLanguage:helm",
+    "workspaceContains:**/*.yaml",
+    "workspaceContains:**/*.yml"
   ],
   "main": "./out/extension.js",
   "contributes": {
-    "languages": [
-      {
-        "id": "yaml",
-        "filenamePatterns": []
-      }
-    ],
     "grammars": [
       {
         "scopeName": "tekton.refs.injection",
@@ -64,17 +60,22 @@
       "editor/context": [
         {
           "command": "tekton-aid.bindParamToEnv",
-          "when": "resourceLangId == yaml",
+          "when": "tektonAid.active",
           "group": "tektonAid"
         },
         {
           "command": "tekton-aid.addTask",
-          "when": "resourceLangId == yaml",
+          "when": "tektonAid.active",
           "group": "tektonAid"
         },
         {
           "command": "tekton-aid.addConditional",
-          "when": "resourceLangId == yaml",
+          "when": "tektonAid.active",
+          "group": "tektonAid"
+        },
+        {
+          "command": "tekton-aid.addParameter",
+          "when": "tektonAid.active",
           "group": "tektonAid"
         }
       ]

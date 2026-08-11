@@ -1,6 +1,6 @@
 {
   "scopeName": "tekton.refs.injection",
-  "injectionSelector": "L:source.yaml -comment",
+  "injectionSelector": "L:source.yaml",
   "patterns": [
     { "include": "#tekton-param-ref" }
   ],
