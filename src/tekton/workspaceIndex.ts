@@ -140,6 +140,19 @@ export class TektonWorkspaceIndex implements vscode.Disposable {
     return byUri.get(firstKey);
   }
 
+  /**
+   * All Task/ClusterTask/StepAction files declaring `name`, not just the
+   * one {@link lookupTaskRecord} deterministically picks. Callers that are
+   * about to *rewrite* this name across the workspace (rename) need to know
+   * when it's ambiguous, not just get a plausible single answer — renaming
+   * as though only one file used the name, when a second file shares it,
+   * would silently orphan whatever referenced that second file.
+   */
+  lookupAllTaskRecords(name: string): IndexedTask[] {
+    const byUri = this.byTaskName.get(name);
+    return byUri ? [...byUri.values()] : [];
+  }
+
   dispose(): void {
     for (const timer of this.reindexTimers.values()) clearTimeout(timer);
     this.reindexTimers.clear();

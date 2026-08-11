@@ -19,6 +19,8 @@ export interface NamedSymbol {
 export interface TaskSymbol extends NamedSymbol {
   /** the taskRef.name this pipeline task entry points at, if any (may differ from the entry's local `name`) */
   taskRefName?: string;
+  /** offset range of the taskRef.name scalar itself, for rename edits */
+  taskRefNameRange?: [number, number];
 }
 
 export interface ParamSymbol extends NamedSymbol {
@@ -43,6 +45,8 @@ export interface TektonSymbols {
   apiVersion: string | undefined;
   /** metadata.name of the resource itself — e.g. what a Task is called for taskRef purposes */
   metadataName: string | undefined;
+  /** offset range of the metadata.name scalar itself, for rename edits */
+  metadataNameRange?: [number, number];
   params: ParamSymbol[];
   workspaces: WorkspaceSymbol[];
   results: ResultSymbol[];
@@ -152,7 +156,16 @@ function taskEntries(seq: YAMLSeq | undefined): TaskSymbol[] {
   const out: TaskSymbol[] = [];
   forEachNamedItem(seq, (m, name, range) => {
     const taskRef = mapOf(m.get("taskRef", true));
-    out.push({ name, range, taskRefName: scalarString(taskRef?.get("name", true)) });
+    const taskRefNameNode = taskRef?.get("name", true);
+    out.push({
+      name,
+      range,
+      taskRefName: scalarString(taskRefNameNode),
+      taskRefNameRange:
+        isScalar(taskRefNameNode) && taskRefNameNode.range
+          ? [taskRefNameNode.range[0], taskRefNameNode.range[1]]
+          : undefined,
+    });
   });
   return out;
 }
@@ -200,6 +213,10 @@ export function parseTektonDocument(source: string): ParsedTektonDoc | undefined
   const metadataNameNode = metadata?.get("name", true);
   const metadataName =
     isScalar(metadataNameNode) && typeof metadataNameNode.value === "string" ? metadataNameNode.value : undefined;
+  const metadataNameRange: [number, number] | undefined =
+    isScalar(metadataNameNode) && metadataNameNode.range
+      ? [metadataNameNode.range[0], metadataNameNode.range[1]]
+      : undefined;
 
   const spec = mapOf(root.get("spec", true));
 
@@ -217,7 +234,7 @@ export function parseTektonDocument(source: string): ParsedTektonDoc | undefined
     lineCounter,
     text,
     isHelmTemplated,
-    symbols: { kind, apiVersion: apiVersionValue, metadataName, params, workspaces, results, tasks },
+    symbols: { kind, apiVersion: apiVersionValue, metadataName, metadataNameRange, params, workspaces, results, tasks },
   };
 }
 

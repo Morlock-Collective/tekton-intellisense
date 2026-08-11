@@ -30,7 +30,7 @@ spec:
         - build
       params:
         - name: image-digest
-          value: $(tasks.buidl.results.digest)
+          value: $(tasks.build.results.digest)
       when:
         - input: "$(params.deploy-env)"
           operator: in

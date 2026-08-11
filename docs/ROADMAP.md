@@ -306,6 +306,64 @@ anything already tracked as a documented limitation:
       not free text, so validating them at the source is more correct than
       merely escaping them.
 
+## Milestone 1.8 — Rename (F2) (done)
+
+- [x] `src/tekton/renameTarget.ts`: pure (`vscode`-free, Node-testable)
+      detection of what's renameable at a given offset —
+      `resolveRenameTarget()` — plus pure edit-computation helpers
+      (`sameDocumentEdits`, `sameDocumentResultEdits`,
+      `taskResultReferenceEdits`, `taskRefIdentityEdits`) that return plain
+      `{range, newText}` edits rather than `vscode.TextEdit`, so the actual
+      renaming logic is testable the same way the rest of the domain model
+      is (`test-fixtures/check.js` applies the computed edits to real
+      fixture text and re-parses the result, not just inspecting the edit
+      list in isolation).
+- [x] `src/tekton/rename.ts`: the `vscode.RenameProvider` wiring `F2` up
+      to that logic. Scope is deliberately split by whether a name can be
+      referenced from outside its own file:
+      - **Same-document only** (param, workspace, pipeline task alias):
+        rename the declaration and every `$(...)` reference to it in the
+        current file. Renaming into a name already used by another entity
+        of the same kind in the same document is rejected outright — that
+        collision is unambiguous and Kubernetes schema validation would
+        reject it anyway (same reasoning as the duplicate-name diagnostic).
+      - **Cross-file, workspace-wide by default** (a Task's own declared
+        `results`, and a Task's own identity — `metadata.name`, referenced
+        by `taskRef.name`): renaming updates every file in the workspace
+        that references it, not just the current one, resolved through the
+        existing `workspaceIndex`.
+      - Invoking rename from *either side* of a cross-file relationship
+        works identically — F2 on a Task's own `results: - name: X`
+        declaration and F2 on some Pipeline's `$(tasks.Y.results.X)`
+        reference to it both resolve to the same canonical operation
+        (rename the declaration, its self-references, and every
+        referencing Pipeline's reference), via `workspaceIndex`'s existing
+        `lookupTaskRecord()`.
+- [x] **The duplicated-name trap, handled explicitly rather than papered
+      over.** Two different Task files can legitimately share a
+      `metadata.name` (a vendored/catalog Task like `git-clone` present in
+      more than one chart), and Tekton itself can't tell them apart by
+      name alone — so neither can this extension. Blindly rewriting every
+      `taskRef.name`/`$(tasks.*.results.*)` reference to a shared name
+      would silently repoint references that were actually meant for
+      whichever file *didn't* get renamed. `workspaceIndex` gained
+      `lookupAllTaskRecords()` (returning every match, not just the one
+      `lookupTaskRecord()` deterministically picks) specifically so the
+      rename provider can detect this before acting: when a name is
+      ambiguous, the local declaration still renames, but cross-file
+      reference updates are skipped with an explicit warning explaining
+      why, rather than guessing. Renaming *into* an already-used Task name
+      is allowed (warned, not blocked) rather than renaming *out of*
+      ambiguity, which is unavoidably guesswork resolved the same way
+      Tekton itself resolves it.
+- [x] Verified via `test-fixtures/check.js`: same-document rename from a
+      reference site (not just the declaration), cross-file result rename
+      in both directions, a Task referenced by *two* pipeline tasks under
+      different local aliases (both `taskRef.name`s must update, an
+      unrelated third one must not), and the data precondition the
+      ambiguity guard depends on (two fixture Task files genuinely sharing
+      a `metadata.name`).
+
 ## Next up
 
 - [ ] Extend the `resolveParamsTarget`-style AST-only targeting to
@@ -314,7 +372,14 @@ anything already tracked as a documented limitation:
 - [ ] Validate task-level `workspaces[].workspace` bindings against
       `spec.workspaces` (Pipeline) — same misspelling-suggestion UX.
 - [ ] Cross-file "Find All References" from a Task's result declaration
-      back to every Pipeline task-result usage across the workspace.
+      back to every Pipeline task-result usage across the workspace — the
+      reverse-lookup infrastructure `rename.ts` built (`findPipelineFiles`)
+      would extend naturally to this.
+- [ ] Extend cross-file rename to a Pipeline's own identity
+      (`metadata.name`, referenced by `pipelineRef.name` in a
+      PipelineRun) — symmetric with the Task-identity case, not yet built
+      since PipelineRun's `pipelineRef.name` isn't currently tracked as a
+      symbol at all.
 - [ ] Diagnostic + quick fix for tasks missing `runAfter` when they
       reference another task's result (implicit vs. explicit ordering).
 - [ ] Publish to the VS Code Marketplace / Open VSX.

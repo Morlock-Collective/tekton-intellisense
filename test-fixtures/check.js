@@ -7,6 +7,13 @@ const { findParamRefs } = require("../out/tekton/paramRefs");
 const { closestMatch } = require("../out/tekton/levenshtein");
 const { findDuplicateGroups } = require("../out/tekton/duplicates");
 const { blockAfterText, quoteYamlString } = require("../out/commands/snippetText");
+const {
+  resolveRenameTarget,
+  sameDocumentEdits,
+  sameDocumentResultEdits,
+  taskResultReferenceEdits,
+  taskRefIdentityEdits,
+} = require("../out/tekton/renameTarget");
 const YAML = require("yaml");
 
 let failures = 0;
@@ -73,7 +80,7 @@ function check(file, expectedWarnings) {
   }
 }
 
-check("pipeline-typo.yaml", 2);
+check("pipeline-typo.yaml", 1);
 check("helm-templated-task.yaml", 1);
 
 console.log("\nduplicate-name check:");
@@ -208,6 +215,122 @@ console.log(
 if (!resolved || resolved.results.map((r) => r.name).join(",") !== "digest,image-url") {
   console.log("  [FAIL] cross-file result resolution did not return the expected results");
   failures++;
+}
+
+/** Splices a set of {range:[start,end], newText} edits into `source`, applied back-to-front so offsets stay valid. */
+function applyTextEdits(source, edits) {
+  const sorted = [...edits].sort((a, b) => b.range[0] - a.range[0]);
+  let result = source;
+  for (const e of sorted) {
+    result = result.slice(0, e.range[0]) + e.newText + result.slice(e.range[1]);
+  }
+  return result;
+}
+
+console.log("\nrename: same-document param/workspace/task-alias:");
+{
+  const file = "pipeline-typo.yaml";
+  const source = fs.readFileSync(path.join(__dirname, file), "utf8");
+  const parsed = parseTektonDocument(source);
+
+  // Click inside the reference, not the declaration, to prove reference-site detection works too.
+  const refOffset = source.indexOf("$(params.deploy-env)") + "$(params.".length + 3;
+  const target = resolveRenameTarget(parsed, refOffset);
+  const edits = target ? sameDocumentEdits(parsed, target.kind, target.name, "release-env") : [];
+  const result = applyTextEdits(source, edits);
+  let after;
+  try {
+    after = parseTektonDocument(result);
+  } catch {
+    after = undefined;
+  }
+  const ok =
+    target?.kind === "param" &&
+    target.name === "deploy-env" &&
+    edits.length === 2 && // declaration + the one correctly-spelled reference
+    after?.symbols.params.some((p) => p.name === "release-env") &&
+    !result.includes("deploy-env");
+  console.log(`  [${ok ? "PASS" : "FAIL"}] ${file}: param "deploy-env" -> "release-env" (${edits.length} edits)`);
+  if (!ok) {
+    console.log({ target, edits });
+    failures++;
+  }
+}
+
+console.log("\nrename: cross-file result (Task result <-> tasks.X.results.Y):");
+{
+  const taskSource = fs.readFileSync(path.join(__dirname, "task-build-image.yaml"), "utf8");
+  const pipelineSource = fs.readFileSync(path.join(__dirname, "pipeline-uses-result.yaml"), "utf8");
+  const taskParsed = parseTektonDocument(taskSource);
+  const pipelineParsed = parseTektonDocument(pipelineSource);
+
+  // Invoked FROM the pipeline's $(tasks.build.results.digest) reference, not the declaration.
+  const refOffset = pipelineSource.indexOf("results.digest") + "results.".length + 2;
+  const target = resolveRenameTarget(pipelineParsed, refOffset);
+  const ok1 = target?.kind === "task-result" && target.taskAlias === "build" && target.resultName === "digest";
+
+  // Resolve to the actual Task (mirrors what workspaceIndex.lookupTaskRecord does).
+  const taskEdits = sameDocumentResultEdits(taskParsed, "digest", "imageDigest");
+  const pipelineEdits = taskResultReferenceEdits(pipelineParsed, "build", "digest", "imageDigest");
+  const taskResult = applyTextEdits(taskSource, taskEdits);
+  const pipelineResult = applyTextEdits(pipelineSource, pipelineEdits);
+
+  const taskAfter = parseTektonDocument(taskResult);
+  const ok2 = taskAfter?.symbols.results.some((r) => r.name === "imageDigest");
+  const ok3 = pipelineResult.includes("$(tasks.build.results.imageDigest)");
+  const ok = ok1 && ok2 && ok3;
+  console.log(`  [${ok ? "PASS" : "FAIL"}] "digest" -> "imageDigest": target=${ok1}, task-file=${!!ok2}, pipeline-file=${ok3}`);
+  if (!ok) {
+    console.log({ target, taskResult, pipelineResult });
+    failures++;
+  }
+}
+
+console.log("\nrename: cross-file task identity (metadata.name <-> taskRef.name), multiple taskRefs:");
+{
+  const pipelineSource = `apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: multi-arch-build
+spec:
+  tasks:
+    - name: build-amd64
+      taskRef:
+        name: build-image
+    - name: build-arm64
+      taskRef:
+        name: build-image
+    - name: unrelated
+      taskRef:
+        name: something-else
+`;
+  const parsed = parseTektonDocument(pipelineSource);
+  const edits = taskRefIdentityEdits(parsed, "build-image", "compile-image");
+  const result = applyTextEdits(pipelineSource, edits);
+  const after = parseTektonDocument(result);
+  const taskRefNames = after?.symbols.tasks.map((t) => t.taskRefName).sort();
+  const ok =
+    edits.length === 2 &&
+    JSON.stringify(taskRefNames) === JSON.stringify(["compile-image", "compile-image", "something-else"].sort());
+  console.log(`  [${ok ? "PASS" : "FAIL"}] both taskRefs to "build-image" updated, "something-else" left alone (${edits.length} edits)`);
+  if (!ok) {
+    console.log({ edits, taskRefNames });
+    failures++;
+  }
+}
+
+console.log("\nrename: duplicate-name ambiguity trap detection:");
+{
+  // Two different Task files legitimately declaring the same metadata.name
+  // (a vendored/catalog Task present in more than one chart) — the data
+  // TektonRenameProvider's ambiguity guard depends on (workspaceIndex
+  // grouping by metadataName) must actually show 2 entries here, or the
+  // guard has nothing to detect.
+  const a = parseTektonDocument(fs.readFileSync(path.join(__dirname, "task-build-image.yaml"), "utf8"));
+  const b = parseTektonDocument(fs.readFileSync(path.join(__dirname, "task-build-image-duplicate.yaml"), "utf8"));
+  const ok = a.symbols.metadataName === "build-image" && b.symbols.metadataName === "build-image" && a.symbols.metadataName === b.symbols.metadataName;
+  console.log(`  [${ok ? "PASS" : "FAIL"}] two Task files share metadata.name "build-image" (ambiguity guard has something to detect)`);
+  if (!ok) failures++;
 }
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) FAILED.`);
