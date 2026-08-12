@@ -17,14 +17,14 @@ export async function addTaskCommand(): Promise<void> {
   const document = editor.document;
   const parsed = parseTektonDocument(document.getText());
   if (!parsed) {
-    vscode.window.showWarningMessage("Tekton Aid: this doesn't look like a Tekton resource.");
+    vscode.window.showWarningMessage("Tekton Intellisense: this doesn't look like a Tekton resource.");
     return;
   }
 
   const owner = resolvePipelineSpecOwner(parsed);
   if (!owner) {
     vscode.window.showWarningMessage(
-      `Tekton Aid: don't know where to add a task for a ${parsed.symbols.kind} resource.`
+      `Tekton Intellisense: don't know where to add a task for a ${parsed.symbols.kind} resource.`
     );
     return;
   }

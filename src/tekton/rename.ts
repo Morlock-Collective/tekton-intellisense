@@ -56,7 +56,7 @@ function assertNoLocalCollision(parsed: ParsedTektonDoc, kind: SameDocKind, oldN
   if (oldName === newName) return;
   const label = kind === "task-alias" ? "task" : kind;
   if (declListFor(parsed, kind).some((s) => s.name === newName)) {
-    throw new Error(`Tekton Aid: "${newName}" is already used by another ${label} in this document.`);
+    throw new Error(`Tekton Intellisense: "${newName}" is already used by another ${label} in this document.`);
   }
 }
 
@@ -68,11 +68,11 @@ function assertNoLocalCollision(parsed: ParsedTektonDoc, kind: SameDocKind, oldN
  */
 function resolveUnambiguous(candidates: IndexedResource[], name: string, kindLabel: string): IndexedResource {
   if (candidates.length === 0) {
-    throw new Error(`Tekton Aid: can't rename — no ${kindLabel} named "${name}" is indexed in this workspace.`);
+    throw new Error(`Tekton Intellisense: can't rename — no ${kindLabel} named "${name}" is indexed in this workspace.`);
   }
   if (candidates.length > 1) {
     throw new Error(
-      `Tekton Aid: can't rename — "${name}" is declared by ${candidates.length} different ${kindLabel} files, so it's ambiguous which one this reference means. Rename the declaration directly, or make the name unique first.`
+      `Tekton Intellisense: can't rename — "${name}" is declared by ${candidates.length} different ${kindLabel} files, so it's ambiguous which one this reference means. Rename the declaration directly, or make the name unique first.`
     );
   }
   return candidates[0];
@@ -98,10 +98,10 @@ export class TektonRenameProvider implements vscode.RenameProvider {
 
   prepareRename(document: vscode.TextDocument, position: vscode.Position): vscode.Range {
     const parsed = parseTektonDocument(document.getText());
-    if (!parsed) throw new Error("Tekton Aid: this isn't a Tekton resource.");
+    if (!parsed) throw new Error("Tekton Intellisense: this isn't a Tekton resource.");
 
     const target = resolveRenameTarget(parsed, document.offsetAt(position));
-    if (!target) throw new Error("Tekton Aid: nothing renameable here.");
+    if (!target) throw new Error("Tekton Intellisense: nothing renameable here.");
 
     return toVscodeRange(parsed, target.range);
   }
@@ -118,7 +118,7 @@ export class TektonRenameProvider implements vscode.RenameProvider {
     if (!target) return undefined;
 
     if (!isValidNewName(target.kind, newName)) {
-      throw new Error(`Tekton Aid: "${newName}" isn't a valid name.`);
+      throw new Error(`Tekton Intellisense: "${newName}" isn't a valid name.`);
     }
 
     const edit = new vscode.WorkspaceEdit();
@@ -143,7 +143,7 @@ export class TektonRenameProvider implements vscode.RenameProvider {
         // Invoked on some Pipeline's $(tasks.X.results.Y) — resolve the real Task Y belongs to.
         // Reference-resolved, so an ambiguous taskRefName must reject outright (see resolveUnambiguous).
         if (!target.taskEntry.taskRefName) {
-          throw new Error(`Tekton Aid: can't rename — this pipeline task has no taskRef.`);
+          throw new Error(`Tekton Intellisense: can't rename — this pipeline task has no taskRef.`);
         }
         const record = resolveUnambiguous(
           this.workspaceIndex.lookupAllTaskRecords(target.taskEntry.taskRefName),
@@ -279,14 +279,14 @@ export class TektonRenameProvider implements vscode.RenameProvider {
 
     if (lookupAll(this.workspaceIndex, newName).length > 0) {
       void vscode.window.showWarningMessage(
-        `Tekton Aid: "${newName}" is already used by another ${fileLabel} file — you now have two ${fileLabel} resources sharing a name, which references to it can't tell apart.`
+        `Tekton Intellisense: "${newName}" is already used by another ${fileLabel} file — you now have two ${fileLabel} resources sharing a name, which references to it can't tell apart.`
       );
     }
 
     const sameName = lookupAll(this.workspaceIndex, name);
     if (sameName.length > 1) {
       void vscode.window.showWarningMessage(
-        `Tekton Aid: "${name}" is declared by ${sameName.length} different ${fileLabel} files — only the one you renamed from was updated. Update references elsewhere by hand if needed.`
+        `Tekton Intellisense: "${name}" is declared by ${sameName.length} different ${fileLabel} files — only the one you renamed from was updated. Update references elsewhere by hand if needed.`
       );
       return edit;
     }
@@ -312,7 +312,7 @@ export class TektonRenameProvider implements vscode.RenameProvider {
     const sameName = this.workspaceIndex.lookupAllTaskRecords(taskName);
     if (sameName.length > 1) {
       void vscode.window.showWarningMessage(
-        `Tekton Aid: "${taskName}" is declared by ${sameName.length} different Task files — only this file's own $(results.${resultName}...) uses were updated. Update $(tasks.*.results.${resultName}) references in Pipelines by hand if needed.`
+        `Tekton Intellisense: "${taskName}" is declared by ${sameName.length} different Task files — only this file's own $(results.${resultName}...) uses were updated. Update $(tasks.*.results.${resultName}) references in Pipelines by hand if needed.`
       );
       return;
     }

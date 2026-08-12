@@ -1,4 +1,4 @@
-# Tekton Aid
+# Tekton Intellisense
 
 A VS Code extension that makes hand-authoring [Tekton](https://tekton.dev)
 `Pipeline`/`Task`/`PipelineRun`/`TaskRun` and Tekton Triggers

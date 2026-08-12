@@ -24,7 +24,7 @@ export async function addConditionalCommand(): Promise<void> {
   const document = editor.document;
   const parsed = parseTektonDocument(document.getText());
   if (!parsed) {
-    vscode.window.showWarningMessage("Tekton Aid: this doesn't look like a Tekton resource.");
+    vscode.window.showWarningMessage("Tekton Intellisense: this doesn't look like a Tekton resource.");
     return;
   }
 
@@ -34,7 +34,7 @@ export async function addConditionalCommand(): Promise<void> {
   if (!taskEntry) {
     const entries = pipelineTaskEntryMaps(parsed);
     if (entries.length === 0) {
-      vscode.window.showWarningMessage("Tekton Aid: this Pipeline has no tasks to add a when expression to.");
+      vscode.window.showWarningMessage("Tekton Intellisense: this Pipeline has no tasks to add a when expression to.");
       return;
     }
     const picked = await vscode.window.showQuickPick(

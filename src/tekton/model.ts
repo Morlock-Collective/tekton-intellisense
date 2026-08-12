@@ -15,6 +15,23 @@ export type TektonKind =
   | "ClusterTriggerBinding"
   | "Unknown";
 
+const TEKTON_KINDS: ReadonlySet<TektonKind> = new Set([
+  "Pipeline",
+  "Task",
+  "ClusterTask",
+  "PipelineRun",
+  "TaskRun",
+  "StepAction",
+]);
+
+const TRIGGERS_KINDS: ReadonlySet<TektonKind> = new Set([
+  "EventListener",
+  "Trigger",
+  "TriggerTemplate",
+  "TriggerBinding",
+  "ClusterTriggerBinding",
+]);
+
 export interface NamedSymbol {
   name: string;
   /** offset range of the `name` scalar itself, for "go to definition"-ish uses */
@@ -333,22 +350,8 @@ export function parseTektonDocument(source: string): ParsedTektonDoc | undefined
     return undefined;
   }
 
-  const kind: TektonKind = isTekton
-    ? kindValue === "Pipeline" ||
-      kindValue === "Task" ||
-      kindValue === "ClusterTask" ||
-      kindValue === "PipelineRun" ||
-      kindValue === "TaskRun" ||
-      kindValue === "StepAction"
-      ? kindValue
-      : "Unknown"
-    : kindValue === "EventListener" ||
-      kindValue === "Trigger" ||
-      kindValue === "TriggerTemplate" ||
-      kindValue === "TriggerBinding" ||
-      kindValue === "ClusterTriggerBinding"
-    ? kindValue
-    : "Unknown";
+  const validKinds = isTekton ? TEKTON_KINDS : TRIGGERS_KINDS;
+  const kind: TektonKind = validKinds.has(kindValue as TektonKind) ? (kindValue as TektonKind) : "Unknown";
 
   const metadata = mapOf(root.get("metadata", true));
   const metadataNameNode = metadata?.get("name", true);

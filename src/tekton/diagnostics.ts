@@ -6,7 +6,7 @@ import { findDuplicateGroups } from "./duplicates";
 import { findMissingRunAfter } from "./runAfterCheck";
 import { TektonWorkspaceIndex } from "./workspaceIndex";
 
-export const DIAGNOSTIC_SOURCE = "tekton-aid";
+export const DIAGNOSTIC_SOURCE = "tekton-intellisense";
 
 function offsetToPosition(doc: vscode.TextDocument, offset: number): vscode.Position {
   return doc.positionAt(offset);

@@ -1,9 +1,9 @@
 {
-  "name": "tekton-aid",
-  "displayName": "Tekton Aid",
+  "name": "tekton-intellisense",
+  "displayName": "Tekton Intellisense",
   "description": "Quality-of-life tooling for authoring Tekton Pipelines: parameter/workspace/result validation, highlighting, and smart editing commands. Helm-template aware.",
   "version": "0.1.0",
-  "publisher": "tekton-aid",
+  "publisher": "tekton-intellisense",
   "private": true,
   "engines": {
     "vscode": "^1.85.0"
@@ -40,48 +40,48 @@
     ],
     "commands": [
       {
-        "command": "tekton-aid.bindParamToEnv",
+        "command": "tekton-intellisense.bindParamToEnv",
         "title": "Tekton: Bind Parameter to Environment Variable"
       },
       {
-        "command": "tekton-aid.addTask",
+        "command": "tekton-intellisense.addTask",
         "title": "Tekton: Add Task to Pipeline"
       },
       {
-        "command": "tekton-aid.addConditional",
+        "command": "tekton-intellisense.addConditional",
         "title": "Tekton: Add When Expression to Task"
       },
       {
-        "command": "tekton-aid.addParameter",
+        "command": "tekton-intellisense.addParameter",
         "title": "Tekton: Add Parameter"
       }
     ],
     "menus": {
       "editor/context": [
         {
-          "command": "tekton-aid.bindParamToEnv",
+          "command": "tekton-intellisense.bindParamToEnv",
           "when": "tektonAid.active",
           "group": "tektonAid"
         },
         {
-          "command": "tekton-aid.addTask",
+          "command": "tekton-intellisense.addTask",
           "when": "tektonAid.active",
           "group": "tektonAid"
         },
         {
-          "command": "tekton-aid.addConditional",
+          "command": "tekton-intellisense.addConditional",
           "when": "tektonAid.active",
           "group": "tektonAid"
         },
         {
-          "command": "tekton-aid.addParameter",
+          "command": "tekton-intellisense.addParameter",
           "when": "tektonAid.active",
           "group": "tektonAid"
         }
       ]
     },
     "configuration": {
-      "title": "Tekton Aid",
+      "title": "Tekton Intellisense",
       "properties": {
         "tektonAid.enableDiagnostics": {
           "type": "boolean",

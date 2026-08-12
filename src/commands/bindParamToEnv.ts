@@ -22,11 +22,11 @@ export async function bindParamToEnvCommand(): Promise<void> {
   const document = editor.document;
   const parsed = parseTektonDocument(document.getText());
   if (!parsed) {
-    vscode.window.showWarningMessage("Tekton Aid: this doesn't look like a Tekton resource.");
+    vscode.window.showWarningMessage("Tekton Intellisense: this doesn't look like a Tekton resource.");
     return;
   }
   if (parsed.symbols.params.length === 0) {
-    vscode.window.showWarningMessage("Tekton Aid: no params declared in this document's spec.params.");
+    vscode.window.showWarningMessage("Tekton Intellisense: no params declared in this document's spec.params.");
     return;
   }
 
@@ -50,7 +50,7 @@ export async function bindParamToEnvCommand(): Promise<void> {
   if (!container) {
     const entries = stepAndSidecarEntryMaps(parsed);
     if (entries.length === 0) {
-      vscode.window.showWarningMessage("Tekton Aid: this document has no steps or sidecars to bind an env var into.");
+      vscode.window.showWarningMessage("Tekton Intellisense: this document has no steps or sidecars to bind an env var into.");
       return;
     }
     const chosen = await vscode.window.showQuickPick(

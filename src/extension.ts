@@ -19,6 +19,7 @@ const YAML_LIKE = /\.(ya?ml)$/i;
 
 let diagnosticCollection: vscode.DiagnosticCollection;
 let statusBar: TektonStatusBar;
+
 const refreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 function looksLikeYaml(document: vscode.TextDocument): boolean {
@@ -35,7 +36,7 @@ function refreshDiagnostics(document: vscode.TextDocument, workspaceIndex: Tekto
     diagnosticCollection.set(document.uri, computeDiagnostics(document, workspaceIndex));
   } catch (err) {
     // Never let a parsing edge case break the editing session.
-    console.error("tekton-aid: failed to compute diagnostics", err);
+    console.error("tekton-intellisense: failed to compute diagnostics", err);
   }
 }
 
@@ -138,10 +139,10 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("tekton-aid.bindParamToEnv", bindParamToEnvCommand),
-    vscode.commands.registerCommand("tekton-aid.addTask", addTaskCommand),
-    vscode.commands.registerCommand("tekton-aid.addConditional", addConditionalCommand),
-    vscode.commands.registerCommand("tekton-aid.addParameter", addParameterCommand)
+    vscode.commands.registerCommand("tekton-intellisense.bindParamToEnv", bindParamToEnvCommand),
+    vscode.commands.registerCommand("tekton-intellisense.addTask", addTaskCommand),
+    vscode.commands.registerCommand("tekton-intellisense.addConditional", addConditionalCommand),
+    vscode.commands.registerCommand("tekton-intellisense.addParameter", addParameterCommand)
   );
 }
 
