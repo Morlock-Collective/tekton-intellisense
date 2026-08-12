@@ -1,8 +1,9 @@
 import * as vscode from "vscode";
-import { ParamSymbol, WorkspaceSymbol, ResultSymbol, TaskSymbol, parseTektonDocument } from "./model";
+import { ParamSymbol, WorkspaceSymbol, ResultSymbol, TaskSymbol, ParsedTektonDoc, parseTektonDocument } from "./model";
 import { findParamRefs } from "./paramRefs";
+import { resolveRenameTarget } from "./renameTarget";
 import { CONTEXT_TREE, CONTEXT_GROUP_DESCRIPTIONS } from "./contextVariables";
-import { TektonWorkspaceIndex } from "./workspaceIndex";
+import { TektonWorkspaceIndex, IndexedResource } from "./workspaceIndex";
 
 function md(text: string): vscode.MarkdownString {
   return new vscode.MarkdownString(text);
@@ -62,6 +63,15 @@ function taskResultHover(task: TaskSymbol, resultName: string, workspaceIndex: T
   return md(`${header}\n\n_Not resolved: taskRef \`${task.taskRefName ?? "?"}\` isn't indexed in this workspace._`);
 }
 
+/** Hover card for a resource's own identity (metadata.name), shown whether the cursor is on the declaration or a reference to it (taskRef/pipelineRef/template.ref/bindings[].ref/triggerRef). */
+function identityHover(kindLabel: string, record: IndexedResource): vscode.MarkdownString {
+  const symbols = record.parsed.symbols;
+  const lines = [`**${symbols.metadataName}** — ${kindLabel}`];
+  if (symbols.params.length) lines.push("", `Params: ${symbols.params.map((p) => `\`${p.name}\``).join(", ")}`);
+  if (symbols.bindingParams.length) lines.push("", `Provides: ${symbols.bindingParams.map((p) => `\`${p.name}\``).join(", ")}`);
+  return md(lines.join("\n"));
+}
+
 function contextHover(raw: string): vscode.MarkdownString | undefined {
   const inner = raw.slice(2, -1).split(".").slice(1); // "$(context.a.b)" -> ["a", "b"]
   const [group, leaf] = inner;
@@ -84,6 +94,11 @@ export class TektonHoverProvider implements vscode.HoverProvider {
     const offset = document.offsetAt(position);
     const { symbols } = parsed;
 
+    // Identity sites: hovering a resource's own metadata.name, or a taskRef/
+    // pipelineRef/template.ref/bindings[].ref/triggerRef pointing at one.
+    const identity = this.identityHoverAt(parsed, offset, document);
+    if (identity) return identity;
+
     // Declaration sites: hovering the `name:` value itself.
     for (const p of symbols.params) {
       if (inRange(p.range, offset)) return new vscode.Hover(paramHover(p), rangeOf(document, p.range!));
@@ -102,7 +117,7 @@ export class TektonHoverProvider implements vscode.HoverProvider {
     for (const ref of findParamRefs(parsed.text)) {
       if (offset < ref.start || offset > ref.end) continue;
 
-      if (ref.kind === "param" && ref.name && ref.nameStart !== undefined && ref.nameEnd !== undefined) {
+      if ((ref.kind === "param" || ref.kind === "tt-param") && ref.name && ref.nameStart !== undefined && ref.nameEnd !== undefined) {
         const p = symbols.params.find((x) => x.name === ref.name);
         if (p) return new vscode.Hover(paramHover(p), rangeOf(document, [ref.nameStart, ref.nameEnd]));
       }
@@ -144,5 +159,39 @@ export class TektonHoverProvider implements vscode.HoverProvider {
     }
 
     return undefined;
+  }
+
+  private identityHoverAt(parsed: ParsedTektonDoc, offset: number, document: vscode.TextDocument): vscode.Hover | undefined {
+    const target = resolveRenameTarget(parsed, offset);
+    if (!target) return undefined;
+
+    let record: IndexedResource | undefined;
+    let kindLabel: string;
+    switch (target.kind) {
+      case "task-identity":
+        record = this.workspaceIndex.lookupTaskRecord(target.name);
+        kindLabel = "Task";
+        break;
+      case "pipeline-identity":
+        record = this.workspaceIndex.lookupPipelineRecord(target.name);
+        kindLabel = "Pipeline";
+        break;
+      case "template-identity":
+        record = this.workspaceIndex.lookupTriggerTemplateRecord(target.name);
+        kindLabel = "TriggerTemplate";
+        break;
+      case "binding-identity":
+        record = this.workspaceIndex.lookupTriggerBindingRecord(target.name);
+        kindLabel = "TriggerBinding";
+        break;
+      case "trigger-identity":
+        record = this.workspaceIndex.lookupTriggerRecord(target.name);
+        kindLabel = "Trigger";
+        break;
+      default:
+        return undefined;
+    }
+    if (!record) return undefined;
+    return new vscode.Hover(identityHover(kindLabel, record), rangeOf(document, target.range));
   }
 }

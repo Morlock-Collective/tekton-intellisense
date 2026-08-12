@@ -1,0 +1,19 @@
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerTemplate
+metadata:
+  name: typo-template
+spec:
+  params:
+    - name: gitrevision
+      default: main
+  resourcetemplates:
+    - apiVersion: tekton.dev/v1
+      kind: PipelineRun
+      metadata:
+        generateName: typo-run-
+      spec:
+        pipelineRef:
+          name: build-and-deploy
+        params:
+          - name: revision
+            value: $(tt.params.gitrevisionn)

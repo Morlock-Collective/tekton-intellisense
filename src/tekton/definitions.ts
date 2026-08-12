@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
-import { parseTektonDocument } from "./model";
+import { ParsedTektonDoc, parseTektonDocument } from "./model";
 import { findParamRefs } from "./paramRefs";
+import { resolveRenameTarget } from "./renameTarget";
 import { TektonWorkspaceIndex } from "./workspaceIndex";
 import { toVscodeRange } from "./rangeUtils";
 
@@ -13,7 +14,8 @@ function localRange(document: vscode.TextDocument, range: [number, number]): vsc
  * result/task reference to its declaring `name:` field. For
  * $(tasks.X.results.Y), jumping from Y resolves cross-file to the actual
  * Task X's taskRef points at, via the same workspace index completions and
- * hover use.
+ * hover use. Also handles the plain-scalar identity references (taskRef/
+ * pipelineRef/template.ref/bindings[].ref/triggerRef) via {@link resolveIdentityDefinition}.
  */
 export class TektonDefinitionProvider implements vscode.DefinitionProvider {
   constructor(private readonly workspaceIndex: TektonWorkspaceIndex) {}
@@ -25,10 +27,13 @@ export class TektonDefinitionProvider implements vscode.DefinitionProvider {
     const offset = document.offsetAt(position);
     const { symbols } = parsed;
 
+    const identity = this.resolveIdentityDefinition(parsed, offset);
+    if (identity) return identity;
+
     for (const ref of findParamRefs(parsed.text)) {
       if (offset < ref.start || offset > ref.end) continue;
 
-      if (ref.kind === "param" && ref.name) {
+      if ((ref.kind === "param" || ref.kind === "tt-param") && ref.name) {
         const p = symbols.params.find((x) => x.name === ref.name);
         if (p?.range) return new vscode.Location(document.uri, localRange(document, p.range));
         return undefined;
@@ -75,5 +80,29 @@ export class TektonDefinitionProvider implements vscode.DefinitionProvider {
     }
 
     return undefined;
+  }
+
+  private resolveIdentityDefinition(parsed: ParsedTektonDoc, offset: number): vscode.Location | undefined {
+    const target = resolveRenameTarget(parsed, offset);
+    if (!target) return undefined;
+
+    const record = (() => {
+      switch (target.kind) {
+        case "task-identity":
+          return this.workspaceIndex.lookupTaskRecord(target.name);
+        case "pipeline-identity":
+          return this.workspaceIndex.lookupPipelineRecord(target.name);
+        case "template-identity":
+          return this.workspaceIndex.lookupTriggerTemplateRecord(target.name);
+        case "binding-identity":
+          return this.workspaceIndex.lookupTriggerBindingRecord(target.name);
+        case "trigger-identity":
+          return this.workspaceIndex.lookupTriggerRecord(target.name);
+        default:
+          return undefined;
+      }
+    })();
+    if (!record?.parsed.symbols.metadataNameRange) return undefined;
+    return new vscode.Location(record.uri, toVscodeRange(record.parsed, record.parsed.symbols.metadataNameRange));
   }
 }

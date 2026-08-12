@@ -65,6 +65,37 @@
             "3": { "name": "variable.language.tekton.context.yaml" },
             "4": { "name": "punctuation.definition.tekton.ref.end.yaml" }
           }
+        },
+        {
+          "name": "meta.tekton.ref.tt-param.yaml",
+          "match": "(\\$\\()(tt\\.params)(\\.)([A-Za-z0-9_-]+)((?:\\.[A-Za-z0-9_-]+|\\[[^\\]]*\\])*)(\\))",
+          "captures": {
+            "1": { "name": "punctuation.definition.tekton.ref.begin.yaml" },
+            "2": { "name": "keyword.other.tekton.ref.kind.yaml" },
+            "3": { "name": "punctuation.separator.tekton.ref.yaml" },
+            "4": { "name": "variable.parameter.tekton.param-name.yaml" },
+            "5": { "name": "punctuation.accessor.tekton.ref.yaml" },
+            "6": { "name": "punctuation.definition.tekton.ref.end.yaml" }
+          }
+        },
+        {
+          "name": "meta.tekton.ref.uid.yaml",
+          "match": "(\\$\\()(uid)(\\))",
+          "captures": {
+            "1": { "name": "punctuation.definition.tekton.ref.begin.yaml" },
+            "2": { "name": "variable.language.tekton.uid.yaml" },
+            "3": { "name": "punctuation.definition.tekton.ref.end.yaml" }
+          }
+        },
+        {
+          "name": "meta.tekton.ref.trigger-event.yaml",
+          "match": "(\\$\\()(body|header|extensions)((?:\\\\.|[A-Za-z0-9_.\\-\\[\\]:*])*)(\\))",
+          "captures": {
+            "1": { "name": "punctuation.definition.tekton.ref.begin.yaml" },
+            "2": { "name": "keyword.other.tekton.ref.kind.yaml" },
+            "3": { "name": "variable.other.tekton.trigger-path.yaml" },
+            "4": { "name": "punctuation.definition.tekton.ref.end.yaml" }
+          }
         }
       ]
     }

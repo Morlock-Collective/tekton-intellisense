@@ -1,9 +1,10 @@
 import * as vscode from "vscode";
-import { NamedSymbol, ParsedTektonDoc, parseTektonDocument, TektonSymbols } from "./model";
+import { NamedSymbol, ParsedTektonDoc, parseTektonDocument, RefName, TektonSymbols } from "./model";
 import { findParamRefs, ParamRef } from "./paramRefs";
 import { closestMatch } from "./levenshtein";
 import { findDuplicateGroups } from "./duplicates";
 import { findMissingRunAfter } from "./runAfterCheck";
+import { TektonWorkspaceIndex } from "./workspaceIndex";
 
 export const DIAGNOSTIC_SOURCE = "tekton-aid";
 
@@ -105,6 +106,87 @@ function checkMissingRunAfter(document: vscode.TextDocument, parsed: ParsedTekto
   });
 }
 
+/**
+ * Flags an EventListener trigger entry's (or standalone Trigger's own)
+ * `bindings[].ref` / `template.ref` / `triggerRef` when the name doesn't
+ * resolve to anything in the workspace index — same warning + "did you
+ * mean" treatment as {@link checkTaskWorkspaceBindings}, just resolved
+ * cross-file via the workspace index instead of this document's own
+ * declarations.
+ */
+function checkTriggerRefs(document: vscode.TextDocument, symbols: TektonSymbols, workspaceIndex: TektonWorkspaceIndex): vscode.Diagnostic[] {
+  const diagnostics: vscode.Diagnostic[] = [];
+
+  const flagUnknown = (
+    range: [number, number] | undefined,
+    name: string | undefined,
+    label: string,
+    lookupAll: (name: string) => unknown[],
+    allNames: () => string[]
+  ) => {
+    if (!name || !range || lookupAll(name).length > 0) return;
+    const suggestion = closestMatch(name, allNames());
+    const diagnostic = new vscode.Diagnostic(
+      new vscode.Range(offsetToPosition(document, range[0]), offsetToPosition(document, range[1])),
+      suggestion
+        ? `Unknown ${label} "${name}". Did you mean "${suggestion}"?`
+        : `Unknown ${label} "${name}" — no such resource found in the workspace.`,
+      vscode.DiagnosticSeverity.Warning
+    );
+    diagnostic.source = DIAGNOSTIC_SOURCE;
+    if (suggestion) diagnostic.code = `suggest:${suggestion}`;
+    diagnostics.push(diagnostic);
+  };
+
+  const checkTriggerLike = (
+    bindingRefs: RefName[],
+    templateRefName?: string,
+    templateRefNameRange?: [number, number],
+    triggerRefName?: string,
+    triggerRefNameRange?: [number, number]
+  ) => {
+    for (const ref of bindingRefs) {
+      flagUnknown(
+        ref.range,
+        ref.name,
+        "TriggerBinding",
+        (n) => workspaceIndex.lookupAllTriggerBindingRecords(n),
+        () => workspaceIndex.allTriggerBindingNames()
+      );
+    }
+    flagUnknown(
+      templateRefNameRange,
+      templateRefName,
+      "TriggerTemplate",
+      (n) => workspaceIndex.lookupAllTriggerTemplateRecords(n),
+      () => workspaceIndex.allTriggerTemplateNames()
+    );
+    flagUnknown(
+      triggerRefNameRange,
+      triggerRefName,
+      "Trigger",
+      (n) => workspaceIndex.lookupAllTriggerRecords(n),
+      () => workspaceIndex.allTriggerNames()
+    );
+  };
+
+  if (symbols.kind === "EventListener") {
+    for (const trigger of symbols.triggers) {
+      checkTriggerLike(
+        trigger.bindingRefs,
+        trigger.templateRefName,
+        trigger.templateRefNameRange,
+        trigger.triggerRefName,
+        trigger.triggerRefNameRange
+      );
+    }
+  } else if (symbols.kind === "Trigger") {
+    checkTriggerLike(symbols.bindingRefs, symbols.templateRefName, symbols.templateRefNameRange);
+  }
+
+  return diagnostics;
+}
+
 function checkRef(
   ref: ParamRef,
   symbols: TektonSymbols
@@ -153,6 +235,21 @@ function checkRef(
       }
       return undefined;
     }
+    case "tt-param": {
+      // Only meaningful within a TriggerTemplate, validating $(tt.params.NAME) against its own spec.params.
+      if (symbols.kind !== "TriggerTemplate") return undefined;
+      const names = symbols.params.map((p) => p.name);
+      if (ref.name && !names.includes(ref.name)) {
+        const suggestion = closestMatch(ref.name, names);
+        return {
+          message: suggestion
+            ? `Unknown param "${ref.name}". Did you mean "${suggestion}"?`
+            : `Unknown param "${ref.name}". Declared params: ${names.join(", ") || "(none)"}.`,
+          suggestion,
+        };
+      }
+      return undefined;
+    }
     case "task-result": {
       if (symbols.kind !== "Pipeline") return undefined;
       const names = symbols.tasks.map((t) => t.name);
@@ -172,7 +269,7 @@ function checkRef(
   }
 }
 
-export function computeDiagnostics(document: vscode.TextDocument): vscode.Diagnostic[] {
+export function computeDiagnostics(document: vscode.TextDocument, workspaceIndex: TektonWorkspaceIndex): vscode.Diagnostic[] {
   const config = vscode.workspace.getConfiguration("tektonAid");
   if (!config.get<boolean>("enableDiagnostics", true)) return [];
 
@@ -185,8 +282,10 @@ export function computeDiagnostics(document: vscode.TextDocument): vscode.Diagno
     ...checkDuplicateNames(document, parsed.symbols.workspaces, "workspace"),
     ...checkDuplicateNames(document, parsed.symbols.results, "result"),
     ...checkDuplicateNames(document, parsed.symbols.tasks, "task"),
+    ...checkDuplicateNames(document, parsed.symbols.bindingParams, "binding parameter"),
     ...checkTaskWorkspaceBindings(document, parsed.symbols),
     ...checkMissingRunAfter(document, parsed),
+    ...checkTriggerRefs(document, parsed.symbols, workspaceIndex),
   ];
 
   const refs = findParamRefs(parsed.text);

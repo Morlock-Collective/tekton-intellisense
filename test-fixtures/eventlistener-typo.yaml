@@ -1,0 +1,12 @@
+apiVersion: triggers.tekton.dev/v1beta1
+kind: EventListener
+metadata:
+  name: typo-listener
+spec:
+  serviceAccountName: tekton-triggers-sa
+  triggers:
+    - name: bad-refs
+      bindings:
+        - ref: github-bindin
+      template:
+        ref: build-template

@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { parseTektonDocument, ParsedTektonDoc, TektonKind, TASK_LIKE_KINDS } from "./model";
+import { parseTektonDocument, ParsedTektonDoc, TektonKind, TASK_LIKE_KINDS, TRIGGER_BINDING_LIKE_KINDS } from "./model";
 import {
   resolveRenameTarget,
   RenameTarget,
@@ -9,12 +9,17 @@ import {
   taskResultReferenceEdits,
   taskRefIdentityEdits,
   pipelineRefIdentityEdits,
+  templateRefIdentityEdits,
+  bindingRefIdentityEdits,
+  triggerRefIdentityEdits,
 } from "./renameTarget";
 import { TektonWorkspaceIndex, IndexedResource } from "./workspaceIndex";
 import { findWorkspaceDocs } from "./workspaceScan";
 import { toVscodeRange } from "./rangeUtils";
 
 const PIPELINE_KIND: ReadonlySet<TektonKind> = new Set(["Pipeline"]);
+const TEMPLATE_KIND: ReadonlySet<TektonKind> = new Set(["TriggerTemplate"]);
+const TRIGGER_KIND: ReadonlySet<TektonKind> = new Set(["Trigger"]);
 
 function addEdits(workspaceEdit: vscode.WorkspaceEdit, uri: vscode.Uri, parsed: ParsedTektonDoc, edits: TextEdit[]): void {
   for (const e of edits) {
@@ -24,8 +29,8 @@ function addEdits(workspaceEdit: vscode.WorkspaceEdit, uri: vscode.Uri, parsed: 
 
 function isValidNewName(kind: RenameTarget["kind"], newName: string): boolean {
   if (!newName) return false;
-  // metadata.name (Task or Pipeline identity) is a Kubernetes resource name — stricter than the rest.
-  if (kind === "task-identity" || kind === "pipeline-identity") {
+  // metadata.name (a resource's own identity) is a Kubernetes resource name — stricter than the rest.
+  if (kind === "task-identity" || kind === "pipeline-identity" || kind === "template-identity" || kind === "binding-identity" || kind === "trigger-identity") {
     return /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/.test(newName);
   }
   return /^[A-Za-z0-9_-]+$/.test(newName);
@@ -73,14 +78,20 @@ function resolveUnambiguous(candidates: IndexedResource[], name: string, kindLab
   return candidates[0];
 }
 
+/** A document kind that can reference an identity by name, and how to find/edit those references within one such document. */
+interface IdentityReferenceScan {
+  kinds: TektonKind[];
+  findEdits: (parsed: ParsedTektonDoc, oldName: string, newName: string) => TextEdit[];
+}
+
 /**
  * F2 rename. Same-document entities (params, workspaces, task aliases)
- * rename in isolation. A Task's own result and a Task/Pipeline's own
- * identity (`taskRef`/`pipelineRef`) rename workspace-wide by default,
- * unless the name is ambiguous (two files sharing a `metadata.name` — a
- * vendored Task present in more than one chart is a real case), in which
- * case cross-file updates are skipped with an explanation instead of
- * guessed.
+ * rename in isolation. A Task's own result and a resource's own identity
+ * (`taskRef`/`pipelineRef`/`template.ref`/`bindings[].ref`/`triggerRef`)
+ * rename workspace-wide by default, unless the name is ambiguous (two files
+ * sharing a `metadata.name` — a vendored Task present in more than one
+ * chart is a real case), in which case cross-file updates are skipped with
+ * an explanation instead of guessed.
  */
 export class TektonRenameProvider implements vscode.RenameProvider {
   constructor(private readonly workspaceIndex: TektonWorkspaceIndex) {}
@@ -145,74 +156,75 @@ export class TektonRenameProvider implements vscode.RenameProvider {
         return edit;
       }
 
-      case "task-identity": {
-        const record = this.resolveIdentityRecord(
+      case "task-identity":
+        return this.renameIdentityAcrossWorkspace(
+          edit,
           document,
           parsed,
           target.name,
+          newName,
           TASK_LIKE_KINDS,
           (idx, n) => idx.lookupAllTaskRecords(n),
-          "Task/ClusterTask/StepAction"
+          "Task/ClusterTask/StepAction",
+          "Task",
+          [{ kinds: ["Pipeline", "TaskRun"], findEdits: taskRefIdentityEdits }]
         );
 
-        const nameRange = record.parsed.symbols.metadataNameRange;
-        if (nameRange) addEdits(edit, record.uri, record.parsed, [{ range: nameRange, newText: newName }]);
-
-        if (this.workspaceIndex.lookupAllTaskRecords(newName).length > 0) {
-          void vscode.window.showWarningMessage(
-            `Tekton Aid: "${newName}" is already used by another Task file — you now have two Tasks sharing a name, which taskRef can't tell apart.`
-          );
-        }
-
-        const sameName = this.workspaceIndex.lookupAllTaskRecords(target.name);
-        if (sameName.length > 1) {
-          void vscode.window.showWarningMessage(
-            `Tekton Aid: "${target.name}" is declared by ${sameName.length} different Task files — only the one you renamed from was updated. Update taskRef references elsewhere by hand if needed.`
-          );
-          return edit;
-        }
-
-        // Both a Pipeline's per-task taskRef and a TaskRun's own top-level taskRef can point at a Task.
-        const referencingDocs = await findWorkspaceDocs(["Pipeline", "TaskRun"]);
-        for (const { uri, parsed: refParsed } of referencingDocs) {
-          addEdits(edit, uri, refParsed, taskRefIdentityEdits(refParsed, target.name, newName));
-        }
-        return edit;
-      }
-
-      case "pipeline-identity": {
-        const record = this.resolveIdentityRecord(
+      case "pipeline-identity":
+        return this.renameIdentityAcrossWorkspace(
+          edit,
           document,
           parsed,
           target.name,
+          newName,
           PIPELINE_KIND,
           (idx, n) => idx.lookupAllPipelineRecords(n),
-          "Pipeline"
+          "Pipeline",
+          "Pipeline",
+          [{ kinds: ["PipelineRun"], findEdits: pipelineRefIdentityEdits }]
         );
 
-        const nameRange = record.parsed.symbols.metadataNameRange;
-        if (nameRange) addEdits(edit, record.uri, record.parsed, [{ range: nameRange, newText: newName }]);
+      case "template-identity":
+        return this.renameIdentityAcrossWorkspace(
+          edit,
+          document,
+          parsed,
+          target.name,
+          newName,
+          TEMPLATE_KIND,
+          (idx, n) => idx.lookupAllTriggerTemplateRecords(n),
+          "TriggerTemplate",
+          "TriggerTemplate",
+          [{ kinds: ["EventListener", "Trigger"], findEdits: templateRefIdentityEdits }]
+        );
 
-        if (this.workspaceIndex.lookupAllPipelineRecords(newName).length > 0) {
-          void vscode.window.showWarningMessage(
-            `Tekton Aid: "${newName}" is already used by another Pipeline file — you now have two Pipelines sharing a name, which pipelineRef can't tell apart.`
-          );
-        }
+      case "binding-identity":
+        return this.renameIdentityAcrossWorkspace(
+          edit,
+          document,
+          parsed,
+          target.name,
+          newName,
+          TRIGGER_BINDING_LIKE_KINDS,
+          (idx, n) => idx.lookupAllTriggerBindingRecords(n),
+          "TriggerBinding/ClusterTriggerBinding",
+          "TriggerBinding",
+          [{ kinds: ["EventListener", "Trigger"], findEdits: bindingRefIdentityEdits }]
+        );
 
-        const sameName = this.workspaceIndex.lookupAllPipelineRecords(target.name);
-        if (sameName.length > 1) {
-          void vscode.window.showWarningMessage(
-            `Tekton Aid: "${target.name}" is declared by ${sameName.length} different Pipeline files — only the one you renamed from was updated. Update pipelineRef references elsewhere by hand if needed.`
-          );
-          return edit;
-        }
-
-        const pipelineRuns = await findWorkspaceDocs(["PipelineRun"]);
-        for (const { uri, parsed: runParsed } of pipelineRuns) {
-          addEdits(edit, uri, runParsed, pipelineRefIdentityEdits(runParsed, target.name, newName));
-        }
-        return edit;
-      }
+      case "trigger-identity":
+        return this.renameIdentityAcrossWorkspace(
+          edit,
+          document,
+          parsed,
+          target.name,
+          newName,
+          TRIGGER_KIND,
+          (idx, n) => idx.lookupAllTriggerRecords(n),
+          "Trigger",
+          "Trigger",
+          [{ kinds: ["EventListener"], findEdits: triggerRefIdentityEdits }]
+        );
     }
   }
 
@@ -233,6 +245,59 @@ export class TektonRenameProvider implements vscode.RenameProvider {
       return { uri: document.uri, parsed };
     }
     return resolveUnambiguous(lookupAll(this.workspaceIndex, name), name, kindLabel);
+  }
+
+  /**
+   * Shared orchestration for renaming a cross-file identity name (a
+   * resource's own `metadata.name`, referenced elsewhere by
+   * taskRef/pipelineRef/template.ref/bindings[].ref/triggerRef): apply the
+   * declaration edit, warn on a new-name collision or on an ambiguous
+   * *declaration* (renamed from the one unambiguous file, but other files
+   * sharing the old name are left alone), then scan and edit every
+   * referencing document. The pieces that differ per identity kind — which
+   * documents count as "own", how to resolve a reference, which doc kinds
+   * reference it and how to edit them — are passed in, since this one shape
+   * now serves 5 identity kinds (Task, Pipeline, TriggerTemplate,
+   * TriggerBinding-family, Trigger).
+   */
+  private async renameIdentityAcrossWorkspace(
+    edit: vscode.WorkspaceEdit,
+    document: vscode.TextDocument,
+    parsed: ParsedTektonDoc,
+    name: string,
+    newName: string,
+    ownKinds: ReadonlySet<TektonKind>,
+    lookupAll: (index: TektonWorkspaceIndex, name: string) => IndexedResource[],
+    resolveLabel: string,
+    fileLabel: string,
+    referencingScans: IdentityReferenceScan[]
+  ): Promise<vscode.WorkspaceEdit> {
+    const record = this.resolveIdentityRecord(document, parsed, name, ownKinds, lookupAll, resolveLabel);
+
+    const nameRange = record.parsed.symbols.metadataNameRange;
+    if (nameRange) addEdits(edit, record.uri, record.parsed, [{ range: nameRange, newText: newName }]);
+
+    if (lookupAll(this.workspaceIndex, newName).length > 0) {
+      void vscode.window.showWarningMessage(
+        `Tekton Aid: "${newName}" is already used by another ${fileLabel} file — you now have two ${fileLabel} resources sharing a name, which references to it can't tell apart.`
+      );
+    }
+
+    const sameName = lookupAll(this.workspaceIndex, name);
+    if (sameName.length > 1) {
+      void vscode.window.showWarningMessage(
+        `Tekton Aid: "${name}" is declared by ${sameName.length} different ${fileLabel} files — only the one you renamed from was updated. Update references elsewhere by hand if needed.`
+      );
+      return edit;
+    }
+
+    for (const scan of referencingScans) {
+      const referencingDocs = await findWorkspaceDocs(scan.kinds);
+      for (const { uri, parsed: refParsed } of referencingDocs) {
+        addEdits(edit, uri, refParsed, scan.findEdits(refParsed, name, newName));
+      }
+    }
+    return edit;
   }
 
   private async addCrossFileResultEdits(

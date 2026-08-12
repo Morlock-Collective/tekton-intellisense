@@ -92,6 +92,23 @@ where it genuinely isn't (`Add When Expression`, `Bind Parameter to Env
 Var` — there can be multiple tasks/steps), the cursor is a fast path and a
 picker is the fallback.
 
+**Tekton Triggers** (`triggers.tekton.dev/*`) — EventListener, Trigger,
+TriggerTemplate, TriggerBinding, and ClusterTriggerBinding get the same
+domain-model/diagnostics/highlighting/hover/navigation/rename treatment as
+Pipelines/Tasks, extending rather than duplicating that machinery:
+TriggerTemplate reuses the existing `params` shape outright; the workspace
+index generalized from two hardcoded Task/Pipeline name maps to one
+keyed-by-group map so TriggerTemplate/TriggerBinding-family/Trigger could
+be added as three more groups instead of three more copy-pasted ones;
+rename/references' per-identity-kind orchestration (declaration edit,
+collision/ambiguity warnings, cross-file scan) was factored into one
+shared function each, used by all 5 identity kinds now instead of just
+Task/Pipeline. TriggerBinding's `value:` expressions
+(`$(body...)`/`$(header...)`/`$(extensions...)`) are recognized and
+highlighted but never validated — see Known limitations. Completions and
+an EventListener/Trigger↔TriggerTemplate param-wiring check are follow-up
+work, not part of this pass — see Next up.
+
 ## Notable bugs found and fixed along the way
 
 - Multi-line inserts only indented their first line correctly; the trailing
@@ -123,6 +140,12 @@ picker is the fallback.
 - Appending to an existing `when:`/`runAfter:` list computed indentation by
   formula instead of matching the list's own existing indentation,
   producing YAML the parser rejected outright in one case.
+- `hover.ts`/`definitions.ts` never actually handled `taskRef`/`pipelineRef`
+  plain-scalar identity references — only rename/references did (via
+  `resolveRenameTarget`). Hovering or Go to Definition on a `taskRef.name`
+  silently did nothing. Found while wiring up the equivalent trigger
+  identity refs and fixed for all 5 identity kinds at once, since both
+  providers now resolve through the same `resolveRenameTarget`.
 
 ## Known limitations (v0.1)
 
@@ -140,7 +163,24 @@ picker is the fallback.
   always emits the value as a quoted string, so an `array`/`object`-typed
   param can't be filled in through the prompt — a single free-text input
   can't represent that shape safely either way.
+- TriggerBinding's `$(body...)`/`$(header...)`/`$(extensions...)`
+  expressions can't be validated for existence — their shape depends on the
+  external webhook payload, which isn't declared anywhere in the Tekton
+  YAML. They're recognized and highlighted but never flagged "unknown,"
+  the same treatment `$(context.*)` already gets.
+- Interceptor/ClusterInterceptor aren't recognized document kinds — they're
+  normally cluster-installed (`github`/`cel`/`slack`/...), not hand-authored
+  per chart. An interceptor's `ref.name` is an unvalidated string.
 
 ## Next up
 
 - [ ] Publish to the VS Code Marketplace / Open VSX.
+- [ ] Completions for `$(tt.params.`/`$(uid)`/`$(body...)` etc., and
+      EventListener/Trigger ref-name completion (`bindings[].ref`,
+      `template.ref`, `triggerRef`) — the latter is a new completion-trigger
+      shape (a plain YAML scalar, not `$(...)`) that ordinary Pipeline/Task
+      authoring has the same gap for (`taskRef.name`, `pipelineRef.name`),
+      worth solving once rather than per resource kind.
+- [ ] Cross-resource check: does every *required* TriggerTemplate param (no
+      default) actually get provided by name from at least one of an
+      EventListener/Trigger's bound TriggerBindings.

@@ -26,6 +26,9 @@ const {
   taskResultReferenceEdits,
   taskRefIdentityEdits,
   pipelineRefIdentityEdits,
+  templateRefIdentityEdits,
+  bindingRefIdentityEdits,
+  triggerRefIdentityEdits,
 } = require("../out/tekton/renameTarget");
 const YAML = require("yaml");
 
@@ -890,6 +893,224 @@ console.log("\nmissing-runAfter quick fix simulation:");
       failures++;
     }
   }
+}
+
+// --- Tekton Triggers: parsing, unknown-ref detection, cross-file identity rename ---
+
+console.log("\nTrigger domain model parsing:");
+{
+  const files = [
+    ["triggerbinding.yaml", "TriggerBinding"],
+    ["clustertriggerbinding.yaml", "ClusterTriggerBinding"],
+    ["triggertemplate.yaml", "TriggerTemplate"],
+    ["eventlistener-crossfile.yaml", "EventListener"],
+    ["trigger.yaml", "Trigger"],
+    ["eventlistener.yaml", "EventListener"],
+  ];
+  let ok = true;
+  for (const [file, expectedKind] of files) {
+    const parsed = parseTektonDocument(fs.readFileSync(path.join(__dirname, file), "utf8"));
+    const kindOk = parsed && parsed.symbols.kind === expectedKind;
+    console.log(`  ${file}: kind=${parsed && parsed.symbols.kind} (expected ${expectedKind})`);
+    if (!kindOk) ok = false;
+  }
+  console.log(`  [${ok ? "PASS" : "FAIL"}] every trigger fixture recognized as its expected kind`);
+  if (!ok) failures++;
+}
+
+console.log("\nTriggerBinding params (name/value, not name/type/default):");
+{
+  const parsed = parseTektonDocument(fs.readFileSync(path.join(__dirname, "triggerbinding.yaml"), "utf8"));
+  const names = parsed.symbols.bindingParams.map((p) => p.name);
+  const values = parsed.symbols.bindingParams.map((p) => p.value);
+  const ok =
+    JSON.stringify(names) === JSON.stringify(["gitrevision", "gitrepositoryurl", "contenttype"]) &&
+    values[0] === "$(body.head_commit.id)";
+  console.log(`  [${ok ? "PASS" : "FAIL"}] triggerbinding.yaml: bindingParams = ${JSON.stringify(names)}`);
+  if (!ok) failures++;
+}
+
+console.log("\nEventListener trigger entries (bindings[].ref, template.ref, triggerRef):");
+{
+  const crossfile = parseTektonDocument(fs.readFileSync(path.join(__dirname, "eventlistener-crossfile.yaml"), "utf8"));
+  const t1 = crossfile.symbols.triggers[0];
+  const ok1 =
+    t1 &&
+    t1.bindingRefs.map((r) => r.name).join(",") === "github-binding" &&
+    t1.templateRefName === "build-template" &&
+    t1.interceptorNames.join(",") === "github";
+
+  const delegated = parseTektonDocument(fs.readFileSync(path.join(__dirname, "eventlistener.yaml"), "utf8"));
+  const t2 = delegated.symbols.triggers[0];
+  const ok2 = t2 && t2.triggerRefName === "build-trigger";
+
+  const standalone = parseTektonDocument(fs.readFileSync(path.join(__dirname, "trigger.yaml"), "utf8"));
+  const ok3 =
+    standalone.symbols.bindingRefs.map((r) => r.name).join(",") === "github-binding" &&
+    standalone.symbols.templateRefName === "build-template";
+
+  const ok = ok1 && ok2 && ok3;
+  console.log(
+    `  [${ok ? "PASS" : "FAIL"}] EventListener entries (${!!ok1}), triggerRef (${!!ok2}), standalone Trigger's own refs (${!!ok3})`
+  );
+  if (!ok) failures++;
+}
+
+console.log("\nunknown $(tt.params.X) reference detection:");
+{
+  const file = "triggertemplate-typo.yaml";
+  const parsed = parseTektonDocument(fs.readFileSync(path.join(__dirname, file), "utf8"));
+  const names = parsed.symbols.params.map((p) => p.name);
+  const ttRefs = findParamRefs(parsed.text).filter((r) => r.kind === "tt-param");
+  const unknown = ttRefs.filter((r) => r.name && !names.includes(r.name));
+  const suggestion = unknown.length === 1 ? closestMatch(unknown[0].name, names) : undefined;
+  const ok = unknown.length === 1 && unknown[0].name === "gitrevisionn" && suggestion === "gitrevision";
+  console.log(`  [${ok ? "PASS" : "FAIL"}] ${file}: 1 unknown $(tt.params.X) ref ("gitrevisionn"), suggests "gitrevision"`);
+  if (!ok) {
+    console.log({ unknown, suggestion });
+    failures++;
+  }
+}
+
+// Mirrors checkTriggerRefs in diagnostics.ts (which can't be called directly
+// from Node; it needs vscode.Diagnostic/vscode.Range and a live
+// TektonWorkspaceIndex) — builds the same "does this ref resolve" check
+// against a small in-memory index of the trigger fixtures above.
+console.log("\nEventListener/Trigger ref validation (simulated workspace index):");
+{
+  function buildNameIndex(files) {
+    const names = [];
+    for (const file of files) {
+      const parsed = parseTektonDocument(fs.readFileSync(path.join(__dirname, file), "utf8"));
+      if (parsed.symbols.metadataName) names.push(parsed.symbols.metadataName);
+    }
+    return names;
+  }
+  const bindingNames = buildNameIndex(["triggerbinding.yaml", "clustertriggerbinding.yaml"]);
+  const templateNames = buildNameIndex(["triggertemplate.yaml"]);
+  const triggerNames = buildNameIndex(["trigger.yaml"]);
+
+  function checkFile(file) {
+    const parsed = parseTektonDocument(fs.readFileSync(path.join(__dirname, file), "utf8"));
+    const unknown = [];
+    const check = (name, known, label) => {
+      if (name && !known.includes(name)) unknown.push({ label, name, suggestion: closestMatch(name, known) });
+    };
+    const checkTrigger = (t) => {
+      for (const ref of t.bindingRefs || []) check(ref.name, bindingNames, "TriggerBinding");
+      check(t.templateRefName, templateNames, "TriggerTemplate");
+      check(t.triggerRefName, triggerNames, "Trigger");
+    };
+    if (parsed.symbols.kind === "EventListener") parsed.symbols.triggers.forEach(checkTrigger);
+    else if (parsed.symbols.kind === "Trigger") checkTrigger(parsed.symbols);
+    return unknown;
+  }
+
+  const validCrossfile = checkFile("eventlistener-crossfile.yaml");
+  const validDelegated = checkFile("eventlistener.yaml");
+  const validStandalone = checkFile("trigger.yaml");
+  const typoResult = checkFile("eventlistener-typo.yaml");
+
+  const ok =
+    validCrossfile.length === 0 &&
+    validDelegated.length === 0 &&
+    validStandalone.length === 0 &&
+    typoResult.length === 1 &&
+    typoResult[0].label === "TriggerBinding" &&
+    typoResult[0].name === "github-bindin" &&
+    typoResult[0].suggestion === "github-binding";
+  console.log(
+    `  [${ok ? "PASS" : "FAIL"}] valid cross-file refs resolve clean; eventlistener-typo.yaml flags "github-bindin" -> "github-binding"`
+  );
+  if (!ok) {
+    console.log({ validCrossfile, validDelegated, validStandalone, typoResult });
+    failures++;
+  }
+}
+
+console.log("\nrename: cross-file TriggerTemplate identity (template.ref, EventListener + standalone Trigger):");
+{
+  const elSource = fs.readFileSync(path.join(__dirname, "eventlistener-crossfile.yaml"), "utf8");
+  const triggerSource = fs.readFileSync(path.join(__dirname, "trigger.yaml"), "utf8");
+  const elParsed = parseTektonDocument(elSource);
+  const triggerParsed = parseTektonDocument(triggerSource);
+
+  const elEdits = templateRefIdentityEdits(elParsed, "build-template", "build-template-v2");
+  const triggerEdits = templateRefIdentityEdits(triggerParsed, "build-template", "build-template-v2");
+  const elResult = applyTextEdits(elSource, elEdits);
+  const triggerResult = applyTextEdits(triggerSource, triggerEdits);
+
+  const ok1 = parseTektonDocument(elResult)?.symbols.triggers[0]?.templateRefName === "build-template-v2";
+  const ok2 = parseTektonDocument(triggerResult)?.symbols.templateRefName === "build-template-v2";
+  const ok = elEdits.length === 1 && triggerEdits.length === 1 && ok1 && ok2;
+  console.log(`  [${ok ? "PASS" : "FAIL"}] "build-template" -> "build-template-v2": EventListener (${!!ok1}), Trigger (${!!ok2})`);
+  if (!ok) {
+    console.log({ elEdits, triggerEdits, elResult, triggerResult });
+    failures++;
+  }
+}
+
+console.log("\nrename: cross-file TriggerBinding identity (bindings[].ref, EventListener + standalone Trigger):");
+{
+  const elSource = fs.readFileSync(path.join(__dirname, "eventlistener-crossfile.yaml"), "utf8");
+  const triggerSource = fs.readFileSync(path.join(__dirname, "trigger.yaml"), "utf8");
+  const elParsed = parseTektonDocument(elSource);
+  const triggerParsed = parseTektonDocument(triggerSource);
+
+  const elEdits = bindingRefIdentityEdits(elParsed, "github-binding", "github-binding-v2");
+  const triggerEdits = bindingRefIdentityEdits(triggerParsed, "github-binding", "github-binding-v2");
+  const elResult = applyTextEdits(elSource, elEdits);
+  const triggerResult = applyTextEdits(triggerSource, triggerEdits);
+
+  const ok1 = parseTektonDocument(elResult)?.symbols.triggers[0]?.bindingRefs[0]?.name === "github-binding-v2";
+  const ok2 = parseTektonDocument(triggerResult)?.symbols.bindingRefs[0]?.name === "github-binding-v2";
+  const ok = elEdits.length === 1 && triggerEdits.length === 1 && ok1 && ok2;
+  console.log(`  [${ok ? "PASS" : "FAIL"}] "github-binding" -> "github-binding-v2": EventListener (${!!ok1}), Trigger (${!!ok2})`);
+  if (!ok) {
+    console.log({ elEdits, triggerEdits, elResult, triggerResult });
+    failures++;
+  }
+}
+
+console.log("\nrename: cross-file Trigger identity (triggerRef):");
+{
+  const source = fs.readFileSync(path.join(__dirname, "eventlistener.yaml"), "utf8");
+  const parsed = parseTektonDocument(source);
+  const edits = triggerRefIdentityEdits(parsed, "build-trigger", "build-trigger-v2");
+  const result = applyTextEdits(source, edits);
+  const ok = edits.length === 1 && parseTektonDocument(result)?.symbols.triggers[0]?.triggerRefName === "build-trigger-v2";
+  console.log(`  [${ok ? "PASS" : "FAIL"}] eventlistener.yaml: "build-trigger" -> "build-trigger-v2" (${edits.length} edit(s))`);
+  if (!ok) {
+    console.log({ edits, result });
+    failures++;
+  }
+}
+
+console.log("\nrename target resolution: cursor on an EventListener's bindings[].ref / template.ref / triggerRef:");
+{
+  const elSource = fs.readFileSync(path.join(__dirname, "eventlistener-crossfile.yaml"), "utf8");
+  const elParsed = parseTektonDocument(elSource);
+  const bindingOffset = elSource.indexOf("github-binding") + 3;
+  const templateOffset = elSource.indexOf("build-template") + 3;
+  const bindingTarget = resolveRenameTarget(elParsed, bindingOffset);
+  const templateTarget = resolveRenameTarget(elParsed, templateOffset);
+
+  const delegatedSource = fs.readFileSync(path.join(__dirname, "eventlistener.yaml"), "utf8");
+  const delegatedParsed = parseTektonDocument(delegatedSource);
+  const triggerRefOffset = delegatedSource.indexOf("build-trigger") + 3;
+  const triggerTarget = resolveRenameTarget(delegatedParsed, triggerRefOffset);
+
+  const ok =
+    bindingTarget?.kind === "binding-identity" &&
+    bindingTarget.name === "github-binding" &&
+    templateTarget?.kind === "template-identity" &&
+    templateTarget.name === "build-template" &&
+    triggerTarget?.kind === "trigger-identity" &&
+    triggerTarget.name === "build-trigger";
+  console.log(
+    `  [${ok ? "PASS" : "FAIL"}] binding-identity(${bindingTarget?.kind}), template-identity(${templateTarget?.kind}), trigger-identity(${triggerTarget?.kind})`
+  );
+  if (!ok) failures++;
 }
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) FAILED.`);

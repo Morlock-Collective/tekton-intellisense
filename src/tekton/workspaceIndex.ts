@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { parseTektonDocument, ParsedTektonDoc, TASK_LIKE_KINDS, TektonSymbols } from "./model";
+import { parseTektonDocument, ParsedTektonDoc, TASK_LIKE_KINDS, TRIGGER_BINDING_LIKE_KINDS, TektonKind, TektonSymbols } from "./model";
 
 const YAML_GLOB = "**/*.{yaml,yml}";
 const EXCLUDE_GLOB = "**/{node_modules,.git}/**";
@@ -17,28 +17,60 @@ export interface IndexedResource {
  */
 type NameIndex = Map<string, Map<string, IndexedResource>>;
 
+type IndexGroup = "task" | "pipeline" | "triggerTemplate" | "triggerBinding" | "trigger";
+
 /**
- * Workspace-wide index of Task/ClusterTask/StepAction and Pipeline
- * resources, each keyed by their own `metadata.name` — the name a
- * `taskRef`/`pipelineRef` points at, usually different from the local
- * `name:` a Pipeline gives that task in `spec.tasks[]`. Lets completions
- * resolve `$(tasks.X.results.Y)` against the actual Task `X` refers to,
- * and rename/references resolve cross-file, even when defined in a
- * different file (the common Helm-chart layout).
+ * Which document kinds share one name index. Kinds resolved by the same bare
+ * name share a group (Task/ClusterTask/StepAction via taskRef,
+ * TriggerBinding/ClusterTriggerBinding via a binding ref); Task and Pipeline
+ * don't, since taskRef/pipelineRef resolve independently even if a name
+ * coincidentally collides between them.
+ */
+const GROUP_KINDS: Record<IndexGroup, ReadonlySet<TektonKind>> = {
+  task: TASK_LIKE_KINDS,
+  pipeline: new Set(["Pipeline"]),
+  triggerTemplate: new Set(["TriggerTemplate"]),
+  triggerBinding: TRIGGER_BINDING_LIKE_KINDS,
+  trigger: new Set(["Trigger"]),
+};
+
+function groupFor(kind: TektonKind): IndexGroup | undefined {
+  for (const group of Object.keys(GROUP_KINDS) as IndexGroup[]) {
+    if (GROUP_KINDS[group].has(kind)) return group;
+  }
+  return undefined;
+}
+
+interface GroupState {
+  byName: NameIndex;
+  nameByUri: Map<string, string>;
+}
+
+function newGroupState(): GroupState {
+  return { byName: new Map(), nameByUri: new Map() };
+}
+
+/**
+ * Workspace-wide index of resources referenced by `metadata.name` across
+ * files: Task/ClusterTask/StepAction and Pipeline (via taskRef/pipelineRef),
+ * and TriggerTemplate/TriggerBinding-family/Trigger (via an EventListener or
+ * Trigger's bindings/template/triggerRef). Lets completions resolve
+ * `$(tasks.X.results.Y)` against the actual Task `X` refers to, and
+ * rename/references resolve cross-file, even when defined in a different
+ * file (the common Helm-chart layout).
  *
  * No persistence, no incremental AST diffing — just a name -> symbols map
  * rebuilt per changed file, kept current via a file watcher plus live
  * re-indexing of open (possibly unsaved) documents.
- *
- * Tasks and Pipelines get separate name indexes rather than one shared
- * map: a Task and Pipeline coincidentally sharing a name isn't actually
- * ambiguous, since `taskRef`/`pipelineRef` resolve independently.
  */
 export class TektonWorkspaceIndex implements vscode.Disposable {
-  private readonly byTaskName: NameIndex = new Map();
-  private readonly byPipelineName: NameIndex = new Map();
-  private readonly taskNameByUri = new Map<string, string>();
-  private readonly pipelineNameByUri = new Map<string, string>();
+  private readonly groups: Record<IndexGroup, GroupState> = {
+    task: newGroupState(),
+    pipeline: newGroupState(),
+    triggerTemplate: newGroupState(),
+    triggerBinding: newGroupState(),
+    trigger: newGroupState(),
+  };
   private readonly disposables: vscode.Disposable[] = [];
   private reindexTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -99,56 +131,48 @@ export class TektonWorkspaceIndex implements vscode.Disposable {
 
   private index(uri: vscode.Uri, text: string): void {
     const key = uri.toString();
-    this.removeFromIndex(this.byTaskName, this.taskNameByUri, key);
-    this.removeFromIndex(this.byPipelineName, this.pipelineNameByUri, key);
+    for (const group of Object.values(this.groups)) {
+      this.removeFromIndex(group, key);
+    }
 
     const parsed = parseTektonDocument(text);
     if (!parsed?.symbols.metadataName) return;
 
-    if (TASK_LIKE_KINDS.has(parsed.symbols.kind)) {
-      this.addToIndex(this.byTaskName, this.taskNameByUri, key, parsed.symbols.metadataName, uri, parsed);
-    } else if (parsed.symbols.kind === "Pipeline") {
-      this.addToIndex(this.byPipelineName, this.pipelineNameByUri, key, parsed.symbols.metadataName, uri, parsed);
-    }
+    const group = groupFor(parsed.symbols.kind);
+    if (group) this.addToIndex(this.groups[group], key, parsed.symbols.metadataName, uri, parsed);
   }
 
-  private addToIndex(
-    nameIndex: NameIndex,
-    nameByUri: Map<string, string>,
-    uriKey: string,
-    name: string,
-    uri: vscode.Uri,
-    parsed: ParsedTektonDoc
-  ): void {
-    let byUri = nameIndex.get(name);
+  private addToIndex(group: GroupState, uriKey: string, name: string, uri: vscode.Uri, parsed: ParsedTektonDoc): void {
+    let byUri = group.byName.get(name);
     if (!byUri) {
       byUri = new Map();
-      nameIndex.set(name, byUri);
+      group.byName.set(name, byUri);
     }
     byUri.set(uriKey, { uri, parsed });
-    nameByUri.set(uriKey, name);
+    group.nameByUri.set(uriKey, name);
   }
 
-  /** Removes whatever entry `uriKey` currently owns from `nameIndex`, without touching any other file's entry under the same name. */
-  private removeFromIndex(nameIndex: NameIndex, nameByUri: Map<string, string>, uriKey: string): void {
-    const prevName = nameByUri.get(uriKey);
+  /** Removes whatever entry `uriKey` currently owns from `group`, without touching any other file's entry under the same name. */
+  private removeFromIndex(group: GroupState, uriKey: string): void {
+    const prevName = group.nameByUri.get(uriKey);
     if (!prevName) return;
-    const byUri = nameIndex.get(prevName);
+    const byUri = group.byName.get(prevName);
     if (byUri) {
       byUri.delete(uriKey);
-      if (byUri.size === 0) nameIndex.delete(prevName);
+      if (byUri.size === 0) group.byName.delete(prevName);
     }
-    nameByUri.delete(uriKey);
+    group.nameByUri.delete(uriKey);
   }
 
   private remove(uri: vscode.Uri): void {
     const key = uri.toString();
-    this.removeFromIndex(this.byTaskName, this.taskNameByUri, key);
-    this.removeFromIndex(this.byPipelineName, this.pipelineNameByUri, key);
+    for (const group of Object.values(this.groups)) {
+      this.removeFromIndex(group, key);
+    }
   }
 
-  private lookupRecord(nameIndex: NameIndex, name: string): IndexedResource | undefined {
-    const byUri = nameIndex.get(name);
+  private lookupRecord(group: IndexGroup, name: string): IndexedResource | undefined {
+    const byUri = this.groups[group].byName.get(name);
     if (!byUri || byUri.size === 0) return undefined;
     // Multiple files can legitimately declare the same metadata.name (a
     // vendored/catalog resource present in more than one chart). There's no
@@ -160,6 +184,15 @@ export class TektonWorkspaceIndex implements vscode.Disposable {
     return byUri.get(firstKey);
   }
 
+  private lookupAllRecords(group: IndexGroup, name: string): IndexedResource[] {
+    const byUri = this.groups[group].byName.get(name);
+    return byUri ? [...byUri.values()] : [];
+  }
+
+  private allNames(group: IndexGroup): string[] {
+    return [...this.groups[group].byName.keys()];
+  }
+
   /** Looks up a Task/ClusterTask/StepAction's declared symbols by its metadata.name (i.e. what a taskRef points at). */
   lookupTask(name: string): TektonSymbols | undefined {
     return this.lookupTaskRecord(name)?.parsed.symbols;
@@ -167,7 +200,7 @@ export class TektonWorkspaceIndex implements vscode.Disposable {
 
   /** Like {@link lookupTask}, but also returns the URI and full parse (incl. lineCounter) needed to build a cross-file Location. */
   lookupTaskRecord(name: string): IndexedResource | undefined {
-    return this.lookupRecord(this.byTaskName, name);
+    return this.lookupRecord("task", name);
   }
 
   /**
@@ -179,8 +212,7 @@ export class TektonWorkspaceIndex implements vscode.Disposable {
    * would silently orphan whatever referenced that second file.
    */
   lookupAllTaskRecords(name: string): IndexedResource[] {
-    const byUri = this.byTaskName.get(name);
-    return byUri ? [...byUri.values()] : [];
+    return this.lookupAllRecords("task", name);
   }
 
   /** Looks up a Pipeline's declared symbols by its metadata.name (i.e. what a pipelineRef points at). */
@@ -190,13 +222,53 @@ export class TektonWorkspaceIndex implements vscode.Disposable {
 
   /** Like {@link lookupPipeline}, but also returns the URI and full parse needed to build a cross-file Location. */
   lookupPipelineRecord(name: string): IndexedResource | undefined {
-    return this.lookupRecord(this.byPipelineName, name);
+    return this.lookupRecord("pipeline", name);
   }
 
   /** All Pipeline files declaring `name` — see {@link lookupAllTaskRecords}, same reasoning, for Pipelines. */
   lookupAllPipelineRecords(name: string): IndexedResource[] {
-    const byUri = this.byPipelineName.get(name);
-    return byUri ? [...byUri.values()] : [];
+    return this.lookupAllRecords("pipeline", name);
+  }
+
+  /** Looks up a TriggerTemplate by its metadata.name (i.e. what a `template.ref` points at). */
+  lookupTriggerTemplateRecord(name: string): IndexedResource | undefined {
+    return this.lookupRecord("triggerTemplate", name);
+  }
+
+  /** All TriggerTemplate files declaring `name` — see {@link lookupAllTaskRecords}, same reasoning. */
+  lookupAllTriggerTemplateRecords(name: string): IndexedResource[] {
+    return this.lookupAllRecords("triggerTemplate", name);
+  }
+
+  /** Looks up a TriggerBinding/ClusterTriggerBinding by its metadata.name (i.e. what a `bindings[].ref` points at) — both kinds share one name index, since a binding ref resolves against either by the same bare name. */
+  lookupTriggerBindingRecord(name: string): IndexedResource | undefined {
+    return this.lookupRecord("triggerBinding", name);
+  }
+
+  /** All TriggerBinding/ClusterTriggerBinding files declaring `name` — see {@link lookupAllTaskRecords}, same reasoning. */
+  lookupAllTriggerBindingRecords(name: string): IndexedResource[] {
+    return this.lookupAllRecords("triggerBinding", name);
+  }
+
+  /** Looks up a standalone Trigger by its metadata.name (i.e. what an EventListener's `triggerRef` points at). */
+  lookupTriggerRecord(name: string): IndexedResource | undefined {
+    return this.lookupRecord("trigger", name);
+  }
+
+  /** All Trigger files declaring `name` — see {@link lookupAllTaskRecords}, same reasoning. */
+  lookupAllTriggerRecords(name: string): IndexedResource[] {
+    return this.lookupAllRecords("trigger", name);
+  }
+
+  /** Every known TriggerTemplate/TriggerBinding-family/Trigger name, for "did you mean" suggestions on an unresolved ref. */
+  allTriggerTemplateNames(): string[] {
+    return this.allNames("triggerTemplate");
+  }
+  allTriggerBindingNames(): string[] {
+    return this.allNames("triggerBinding");
+  }
+  allTriggerNames(): string[] {
+    return this.allNames("trigger");
   }
 
   dispose(): void {

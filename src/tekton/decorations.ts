@@ -49,6 +49,8 @@ export function updateDecorations(editor: vscode.TextEditor, parsed: ParsedTekto
   addDeclarations(parsed.symbols.workspaces);
   addDeclarations(parsed.symbols.results);
   addDeclarations(parsed.symbols.tasks);
+  addDeclarations(parsed.symbols.bindingParams);
+  addDeclarations(parsed.symbols.triggers);
 
   const refRanges: vscode.Range[] = [];
   for (const ref of findParamRefs(parsed.text)) {

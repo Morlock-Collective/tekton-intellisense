@@ -29,10 +29,10 @@ function looksLikeYaml(document: vscode.TextDocument): boolean {
   return document.languageId === "yaml" || document.languageId === "helm" || YAML_LIKE.test(document.fileName);
 }
 
-function refreshDiagnostics(document: vscode.TextDocument): void {
+function refreshDiagnostics(document: vscode.TextDocument, workspaceIndex: TektonWorkspaceIndex): void {
   if (!looksLikeYaml(document)) return;
   try {
-    diagnosticCollection.set(document.uri, computeDiagnostics(document));
+    diagnosticCollection.set(document.uri, computeDiagnostics(document, workspaceIndex));
   } catch (err) {
     // Never let a parsing edge case break the editing session.
     console.error("tekton-aid: failed to compute diagnostics", err);
@@ -66,7 +66,7 @@ export function activate(context: vscode.ExtensionContext): void {
       key,
       setTimeout(() => {
         refreshTimers.delete(key);
-        refreshDiagnostics(document);
+        refreshDiagnostics(document, workspaceIndex);
         if (vscode.window.activeTextEditor?.document === document) {
           refreshActiveEditorState(vscode.window.activeTextEditor);
         }
@@ -76,12 +76,12 @@ export function activate(context: vscode.ExtensionContext): void {
 
   refreshActiveEditorState(vscode.window.activeTextEditor);
   if (vscode.window.activeTextEditor) {
-    refreshDiagnostics(vscode.window.activeTextEditor.document);
+    refreshDiagnostics(vscode.window.activeTextEditor.document, workspaceIndex);
   }
 
   context.subscriptions.push(
     vscode.workspace.onDidOpenTextDocument((doc) => {
-      refreshDiagnostics(doc);
+      refreshDiagnostics(doc, workspaceIndex);
       if (vscode.window.activeTextEditor?.document === doc) {
         refreshActiveEditorState(vscode.window.activeTextEditor);
       }
@@ -89,13 +89,13 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.workspace.onDidChangeTextDocument((e) => scheduleRefresh(e.document)),
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       refreshActiveEditorState(editor);
-      if (editor) refreshDiagnostics(editor.document);
+      if (editor) refreshDiagnostics(editor.document, workspaceIndex);
     }),
     vscode.workspace.onDidCloseTextDocument((doc) => diagnosticCollection.delete(doc.uri)),
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("tektonAid")) {
         for (const editor of vscode.window.visibleTextEditors) {
-          refreshDiagnostics(editor.document);
+          refreshDiagnostics(editor.document, workspaceIndex);
         }
         refreshActiveEditorState(vscode.window.activeTextEditor);
       }

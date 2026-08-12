@@ -1,0 +1,15 @@
+apiVersion: triggers.tekton.dev/v1beta1
+kind: Trigger
+metadata:
+  name: build-trigger
+spec:
+  interceptors:
+    - ref:
+        name: cel
+      params:
+        - name: filter
+          value: "header.match('X-GitHub-Event', 'push')"
+  bindings:
+    - ref: github-binding
+  template:
+    ref: build-template

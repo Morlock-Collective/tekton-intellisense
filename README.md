@@ -1,11 +1,12 @@
 # Tekton Aid
 
 A VS Code extension that makes hand-authoring [Tekton](https://tekton.dev)
-`Pipeline`/`Task`/`PipelineRun`/`TaskRun` YAML less miserable — not by
-replacing the editor with a graphical designer, but by making the text
-editor smarter about the domain: it knows what a `$(params.foo)` reference
-is, whether `foo` actually exists, and how to insert the boilerplate you
-retype constantly.
+`Pipeline`/`Task`/`PipelineRun`/`TaskRun` and Tekton Triggers
+`EventListener`/`Trigger`/`TriggerTemplate`/`TriggerBinding` YAML less
+miserable — not by replacing the editor with a graphical designer, but by
+making the text editor smarter about the domain: it knows what a
+`$(params.foo)` reference is, whether `foo` actually exists, and how to
+insert the boilerplate you retype constantly.
 
 It is Helm-aware: charts that keep Tekton resources under `templates/` with
 `{{ ... }}` actions are parsed by masking template actions in place (see
@@ -42,6 +43,16 @@ file.
   fix adds it, making a dependency that's otherwise only visible by
   cross-referencing param values explicit in the one place a reader would
   look first.
+- **Tekton Triggers support** — `EventListener`/`Trigger`/`TriggerTemplate`/
+  `TriggerBinding`/`ClusterTriggerBinding` get the same reference validation,
+  highlighting, hover, Go to Definition, Find All References, and Rename as
+  Pipelines/Tasks: `$(tt.params.NAME)` inside a TriggerTemplate's
+  `resourcetemplates` validates against its own declared params, and an
+  EventListener/Trigger's `bindings[].ref`/`template.ref`/`triggerRef`
+  resolve cross-file the same way `taskRef`/`pipelineRef` do.
+  `$(body...)`/`$(header...)`/`$(extensions...)` in a TriggerBinding's
+  `value:` are recognized and highlighted but never validated — there's no
+  declared schema for the incoming webhook payload to check them against.
 - **Context-aware completion** — typing `$(params.` (or `workspaces.`,
   `results.`, `tasks.`, `context.`) suggests exactly what's valid there:
   declared names for the current document, filtered by resource kind (no
@@ -137,4 +148,5 @@ what's implemented and what's next.
 - [Tekton Pipelines variables](https://tekton.dev/docs/pipelines/variables/)
 - [Tekton Pipeline API](https://tekton.dev/docs/pipelines/pipelines/)
 - [Tekton Task API](https://tekton.dev/docs/pipelines/tasks/)
+- [Tekton Triggers](https://tekton.dev/docs/triggers/)
 - [Helm template functions](https://helm.sh/docs/chart_template_guide/function_list/)

@@ -8,11 +8,22 @@ export type TektonKind =
   | "PipelineRun"
   | "TaskRun"
   | "StepAction"
+  | "EventListener"
+  | "Trigger"
+  | "TriggerTemplate"
+  | "TriggerBinding"
+  | "ClusterTriggerBinding"
   | "Unknown";
 
 export interface NamedSymbol {
   name: string;
   /** offset range of the `name` scalar itself, for "go to definition"-ish uses */
+  range?: [number, number];
+}
+
+/** A plain scalar name reference (e.g. `ref: some-name`), distinct from a `$(...)` reference. */
+export interface RefName {
+  name: string;
   range?: [number, number];
 }
 
@@ -51,6 +62,23 @@ export interface ResultSymbol extends NamedSymbol {
   description?: string;
 }
 
+/** TriggerBinding/ClusterTriggerBinding's spec.params entries — a *providing* list (name/value), not a declaring one like ParamSymbol. */
+export interface TriggerBindingParamSymbol extends NamedSymbol {
+  value?: string;
+  valueRange?: [number, number];
+}
+
+/** EventListener.spec.triggers[] entry. Parallel to TaskSymbol: a named entry that points at other resources by name. */
+export interface TriggerEntrySymbol extends NamedSymbol {
+  bindingRefs: RefName[];
+  templateRefName?: string;
+  templateRefNameRange?: [number, number];
+  /** points at a standalone Trigger instead of inline bindings+template, if set */
+  triggerRefName?: string;
+  triggerRefNameRange?: [number, number];
+  interceptorNames: string[];
+}
+
 export interface TektonSymbols {
   kind: TektonKind;
   apiVersion: string | undefined;
@@ -66,14 +94,24 @@ export interface TektonSymbols {
   taskRefName?: string;
   /** offset range of that taskRef.name scalar, for rename edits */
   taskRefNameRange?: [number, number];
+  /** a standalone Trigger's own spec.template.ref — the TriggerTemplate it points at */
+  templateRefName?: string;
+  templateRefNameRange?: [number, number];
+  /** a standalone Trigger's own spec.bindings[].ref entries */
+  bindingRefs: RefName[];
   params: ParamSymbol[];
   workspaces: WorkspaceSymbol[];
   results: ResultSymbol[];
   /** pipeline.spec.tasks / spec.finally entries */
   tasks: TaskSymbol[];
+  /** TriggerBinding/ClusterTriggerBinding's spec.params entries */
+  bindingParams: TriggerBindingParamSymbol[];
+  /** EventListener.spec.triggers entries */
+  triggers: TriggerEntrySymbol[];
 }
 
 export const TASK_LIKE_KINDS: ReadonlySet<TektonKind> = new Set(["Task", "ClusterTask", "StepAction"]);
+export const TRIGGER_BINDING_LIKE_KINDS: ReadonlySet<TektonKind> = new Set(["TriggerBinding", "ClusterTriggerBinding"]);
 
 export interface ParsedTektonDoc {
   doc: Document.Parsed;
@@ -84,9 +122,14 @@ export interface ParsedTektonDoc {
 }
 
 const TEKTON_API_PREFIX = "tekton.dev/";
+const TRIGGERS_API_PREFIX = "triggers.tekton.dev/";
 
 function isTektonApiVersion(v: unknown): v is string {
   return typeof v === "string" && v.startsWith(TEKTON_API_PREFIX);
+}
+
+function isTriggersApiVersion(v: unknown): v is string {
+  return typeof v === "string" && v.startsWith(TRIGGERS_API_PREFIX);
 }
 
 function seqOf(node: unknown): YAMLSeq | undefined {
@@ -105,11 +148,31 @@ function scalarRange(node: unknown): [number, number] | undefined {
   return isScalar(node) && node.range ? [node.range[0], node.range[1]] : undefined;
 }
 
-/** Reads a `<key>: { name: ... }` ref field (taskRef, pipelineRef) directly under `map`. */
+/** Reads a `<key>: { name: ... }` ref field (taskRef, pipelineRef, an interceptor's `ref`) directly under `map`. */
 function refNameAndRange(map: YAMLMap | undefined, key: string): { name?: string; range?: [number, number] } {
   const ref = mapOf(map?.get(key, true));
   const nameNode = ref?.get("name", true);
   return { name: scalarString(nameNode), range: scalarRange(nameNode) };
+}
+
+/** Reads a `<key>: { ref: <name> }` field (an EventListener/Trigger's `template`), where `ref` is a bare scalar rather than nested under `.name`. */
+function scalarRefField(map: YAMLMap | undefined, key: string): { name?: string; range?: [number, number] } {
+  const sub = mapOf(map?.get(key, true));
+  const refNode = sub?.get("ref", true);
+  return { name: scalarString(refNode), range: scalarRange(refNode) };
+}
+
+/** Reads a sequence of `{ ref: <name> }` entries (EventListener/Trigger's `bindings`) — embedded name/value bindings have no `ref` and are silently skipped, since there's no cross-file identity to resolve for those. */
+function scalarRefList(seq: YAMLSeq | undefined): RefName[] {
+  const out: RefName[] = [];
+  if (!seq) return out;
+  for (const item of seq.items) {
+    const m = mapOf(item);
+    const refNode = m?.get("ref", true);
+    const name = scalarString(refNode);
+    if (name) out.push({ name, range: scalarRange(refNode) });
+  }
+  return out;
 }
 
 function scalarBoolean(node: unknown): boolean | undefined {
@@ -201,6 +264,44 @@ function taskEntries(seq: YAMLSeq | undefined): TaskSymbol[] {
   return out;
 }
 
+function triggerBindingParamEntries(seq: YAMLSeq | undefined): TriggerBindingParamSymbol[] {
+  const out: TriggerBindingParamSymbol[] = [];
+  forEachNamedItem(seq, (m, name, range) => {
+    const valueNode = m.get("value", true);
+    out.push({ name, range, value: scalarString(valueNode), valueRange: scalarRange(valueNode) });
+  });
+  return out;
+}
+
+function interceptorNames(seq: YAMLSeq | undefined): string[] {
+  const out: string[] = [];
+  if (!seq) return out;
+  for (const item of seq.items) {
+    const ref = refNameAndRange(mapOf(item), "ref");
+    if (ref.name) out.push(ref.name);
+  }
+  return out;
+}
+
+function triggerEntries(seq: YAMLSeq | undefined): TriggerEntrySymbol[] {
+  const out: TriggerEntrySymbol[] = [];
+  forEachNamedItem(seq, (m, name, range) => {
+    const templateRef = scalarRefField(m, "template");
+    const triggerRefNode = m.get("triggerRef", true);
+    out.push({
+      name,
+      range,
+      bindingRefs: scalarRefList(seqOf(m.get("bindings", true))),
+      templateRefName: templateRef.name,
+      templateRefNameRange: templateRef.range,
+      triggerRefName: scalarString(triggerRefNode),
+      triggerRefNameRange: scalarRange(triggerRefNode),
+      interceptorNames: interceptorNames(seqOf(m.get("interceptors", true))),
+    });
+  });
+  return out;
+}
+
 /**
  * Parses a Tekton YAML document (optionally Helm-templated) and extracts the
  * symbol table used for reference validation. Returns undefined if the text
@@ -226,19 +327,28 @@ export function parseTektonDocument(source: string): ParsedTektonDoc | undefined
   const kindNode = root.get("kind", true);
   const kindValue = isScalar(kindNode) ? kindNode.value : undefined;
 
-  if (!isTektonApiVersion(apiVersionValue)) {
+  const isTekton = isTektonApiVersion(apiVersionValue);
+  const isTriggers = isTriggersApiVersion(apiVersionValue);
+  if (!isTekton && !isTriggers) {
     return undefined;
   }
 
-  const kind: TektonKind =
-    kindValue === "Pipeline" ||
-    kindValue === "Task" ||
-    kindValue === "ClusterTask" ||
-    kindValue === "PipelineRun" ||
-    kindValue === "TaskRun" ||
-    kindValue === "StepAction"
+  const kind: TektonKind = isTekton
+    ? kindValue === "Pipeline" ||
+      kindValue === "Task" ||
+      kindValue === "ClusterTask" ||
+      kindValue === "PipelineRun" ||
+      kindValue === "TaskRun" ||
+      kindValue === "StepAction"
       ? kindValue
-      : "Unknown";
+      : "Unknown"
+    : kindValue === "EventListener" ||
+      kindValue === "Trigger" ||
+      kindValue === "TriggerTemplate" ||
+      kindValue === "TriggerBinding" ||
+      kindValue === "ClusterTriggerBinding"
+    ? kindValue
+    : "Unknown";
 
   const metadata = mapOf(root.get("metadata", true));
   const metadataNameNode = metadata?.get("name", true);
@@ -249,6 +359,8 @@ export function parseTektonDocument(source: string): ParsedTektonDoc | undefined
 
   const pipelineRef = kind === "PipelineRun" ? refNameAndRange(spec, "pipelineRef") : undefined;
   const ownTaskRef = kind === "TaskRun" ? refNameAndRange(spec, "taskRef") : undefined;
+  const ownTemplateRef = kind === "Trigger" ? scalarRefField(spec, "template") : undefined;
+  const ownBindingRefs = kind === "Trigger" ? scalarRefList(seqOf(spec?.get("bindings", true))) : [];
 
   const params = paramEntries(seqOf(spec?.get("params", true)));
   const workspaces = workspaceEntries(seqOf(spec?.get("workspaces", true)));
@@ -258,6 +370,11 @@ export function parseTektonDocument(source: string): ParsedTektonDoc | undefined
     ...taskEntries(seqOf(spec?.get("tasks", true))),
     ...taskEntries(seqOf(spec?.get("finally", true))),
   ];
+
+  const bindingParams = TRIGGER_BINDING_LIKE_KINDS.has(kind)
+    ? triggerBindingParamEntries(seqOf(spec?.get("params", true)))
+    : [];
+  const triggers = kind === "EventListener" ? triggerEntries(seqOf(spec?.get("triggers", true))) : [];
 
   return {
     doc,
@@ -273,10 +390,15 @@ export function parseTektonDocument(source: string): ParsedTektonDoc | undefined
       pipelineRefNameRange: pipelineRef?.range,
       taskRefName: ownTaskRef?.name,
       taskRefNameRange: ownTaskRef?.range,
+      templateRefName: ownTemplateRef?.name,
+      templateRefNameRange: ownTemplateRef?.range,
+      bindingRefs: ownBindingRefs,
       params,
       workspaces,
       results,
       tasks,
+      bindingParams,
+      triggers,
     },
   };
 }

@@ -1,12 +1,28 @@
 /**
  * Finds and classifies Tekton variable references of the form `$(...)`.
- * Reference: https://tekton.dev/docs/pipelines/variables/
+ * References: https://tekton.dev/docs/pipelines/variables/,
+ * https://tekton.dev/docs/triggers/triggerbindings/ (`body`/`header`/`extensions`/`context`,
+ * JSONPath-ish with `[0]`/`[0:2]` and `\.`-escaped dots), and
+ * https://tekton.dev/docs/triggers/triggertemplates/ (`tt.params`/`uid`).
  */
 
-// $( ... ) where the body is dots/word-chars/hyphens/brackets/stars, no nested parens.
-const REF_PATTERN = /\$\(([a-zA-Z0-9_.\-\[\]*]+)\)/g;
+// $( ... ) where the body is dots/word-chars/hyphens/brackets/stars/colons/backslashes
+// (colons and backslashes are only meaningful in TriggerBinding's body/header/extensions
+// paths — slicing like [0:2], and escaped dots like foo\.bar), no nested parens.
+const REF_PATTERN = /\$\(([a-zA-Z0-9_.\-\[\]*:\\]+)\)/g;
 
-export type RefKind = "param" | "workspace" | "result" | "task-result" | "context" | "unknown";
+export type RefKind =
+  | "param"
+  | "workspace"
+  | "result"
+  | "task-result"
+  | "context"
+  | "tt-param"
+  | "uid"
+  | "trigger-body"
+  | "trigger-header"
+  | "trigger-extension"
+  | "unknown";
 
 export interface ParamRef {
   /** full match, e.g. "$(params.foo)" */
@@ -120,6 +136,48 @@ function classify(inner: string, matchStart: number): ParamRef {
       nameEnd: matchStart + 2 + nameOffsetInInner + name.length,
       resultNameStart: matchStart + 2 + resultOffsetInInner,
       resultNameEnd: matchStart + 2 + resultOffsetInInner + resultName.length,
+    };
+  }
+
+  // $(tt.params.NAME) -- inside a TriggerTemplate's resourcetemplates, referring to its own declared params
+  if (head === "tt" && parts[1] === "params" && parts.length >= 3) {
+    const name = stripIndex(parts[2]);
+    const prefix = "tt.params.";
+    return {
+      raw,
+      start: matchStart,
+      end,
+      kind: "tt-param",
+      name,
+      nameStart: matchStart + 2 + prefix.length,
+      nameEnd: matchStart + 2 + prefix.length + name.length,
+    };
+  }
+
+  // $(uid) -- a TriggerTemplate builtin, a random value like generateName
+  if (head === "uid" && parts.length === 1) {
+    return { raw, start: matchStart, end, kind: "uid" };
+  }
+
+  // $(body...) / $(header...) / $(extensions...) -- TriggerBinding value expressions extracting
+  // from the incoming event. Arbitrary-depth JSONPath with no declared schema to check against, so
+  // unlike the other kinds above, `name` here is the whole remaining path, not a single segment —
+  // and it's read directly off `inner` (not `parts`) so `\.`-escaped dots in the path survive intact.
+  if (head === "body" || head === "header" || head === "extensions") {
+    const kind: RefKind = head === "body" ? "trigger-body" : head === "header" ? "trigger-header" : "trigger-extension";
+    const dotIndex = inner.indexOf(".");
+    if (dotIndex === -1) {
+      return { raw, start: matchStart, end, kind };
+    }
+    const pathStart = dotIndex + 1;
+    return {
+      raw,
+      start: matchStart,
+      end,
+      kind,
+      name: inner.slice(pathStart),
+      nameStart: matchStart + 2 + pathStart,
+      nameEnd: matchStart + 2 + inner.length,
     };
   }
 

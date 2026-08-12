@@ -1,20 +1,22 @@
-import { ParsedTektonDoc, TaskSymbol, TASK_LIKE_KINDS } from "./model";
+import { ParsedTektonDoc, TaskSymbol, TASK_LIKE_KINDS, TRIGGER_BINDING_LIKE_KINDS } from "./model";
 import { findParamRefs } from "./paramRefs";
 
 /**
  * What's being renamed, and the range of the specific token under the
  * cursor (for `prepareRename` to anchor the rename widget). The kind
  * determines scope: param/workspace/task-alias are private to the document
- * they're declared in; result, task-identity, and pipeline-identity can be
- * referenced from other files and need workspace-wide handling — see
- * rename.ts.
+ * they're declared in; result and the `*-identity` kinds can be referenced
+ * from other files and need workspace-wide handling — see rename.ts.
  */
 export type RenameTarget =
   | { kind: "param" | "workspace" | "task-alias"; name: string; range: [number, number] }
   | { kind: "result"; name: string; range: [number, number] }
   | { kind: "task-result"; taskAlias: string; resultName: string; range: [number, number]; taskEntry: TaskSymbol }
   | { kind: "task-identity"; name: string; range: [number, number] }
-  | { kind: "pipeline-identity"; name: string; range: [number, number] };
+  | { kind: "pipeline-identity"; name: string; range: [number, number] }
+  | { kind: "template-identity"; name: string; range: [number, number] }
+  | { kind: "binding-identity"; name: string; range: [number, number] }
+  | { kind: "trigger-identity"; name: string; range: [number, number] };
 
 function inRange(range: [number, number] | undefined, offset: number): boolean {
   return !!range && offset >= range[0] && offset <= range[1];
@@ -56,6 +58,33 @@ export function resolveRenameTarget(parsed: ParsedTektonDoc, offset: number): Re
   }
   if (symbols.taskRefName && inRange(symbols.taskRefNameRange, offset)) {
     return { kind: "task-identity", name: symbols.taskRefName, range: symbols.taskRefNameRange! };
+  }
+
+  for (const trigger of symbols.triggers) {
+    for (const ref of trigger.bindingRefs) {
+      if (inRange(ref.range, offset)) return { kind: "binding-identity", name: ref.name, range: ref.range! };
+    }
+    if (trigger.templateRefName && inRange(trigger.templateRefNameRange, offset)) {
+      return { kind: "template-identity", name: trigger.templateRefName, range: trigger.templateRefNameRange! };
+    }
+    if (trigger.triggerRefName && inRange(trigger.triggerRefNameRange, offset)) {
+      return { kind: "trigger-identity", name: trigger.triggerRefName, range: trigger.triggerRefNameRange! };
+    }
+  }
+  if (symbols.metadataName && symbols.kind === "TriggerTemplate" && inRange(symbols.metadataNameRange, offset)) {
+    return { kind: "template-identity", name: symbols.metadataName, range: symbols.metadataNameRange! };
+  }
+  if (symbols.metadataName && TRIGGER_BINDING_LIKE_KINDS.has(symbols.kind) && inRange(symbols.metadataNameRange, offset)) {
+    return { kind: "binding-identity", name: symbols.metadataName, range: symbols.metadataNameRange! };
+  }
+  if (symbols.metadataName && symbols.kind === "Trigger" && inRange(symbols.metadataNameRange, offset)) {
+    return { kind: "trigger-identity", name: symbols.metadataName, range: symbols.metadataNameRange! };
+  }
+  if (symbols.templateRefName && inRange(symbols.templateRefNameRange, offset)) {
+    return { kind: "template-identity", name: symbols.templateRefName, range: symbols.templateRefNameRange! };
+  }
+  for (const ref of symbols.bindingRefs) {
+    if (inRange(ref.range, offset)) return { kind: "binding-identity", name: ref.name, range: ref.range! };
   }
 
   for (const ref of findParamRefs(text)) {
@@ -181,4 +210,45 @@ export function pipelineRefIdentityEdits(parsed: ParsedTektonDoc, name: string, 
     return [{ range: parsed.symbols.pipelineRefNameRange, newText: newName }];
   }
   return [];
+}
+
+/** Every `bindings[].ref: <name>` in `parsed` (an EventListener trigger entry's, or a standalone Trigger's own) pointing at one specific TriggerBinding/ClusterTriggerBinding identity. */
+export function bindingRefIdentityEdits(parsed: ParsedTektonDoc, name: string, newName: string): TextEdit[] {
+  const edits: TextEdit[] = [];
+  for (const trigger of parsed.symbols.triggers) {
+    for (const ref of trigger.bindingRefs) {
+      if (ref.name === name && ref.range) edits.push({ range: ref.range, newText: newName });
+    }
+  }
+  if (parsed.symbols.kind === "Trigger") {
+    for (const ref of parsed.symbols.bindingRefs) {
+      if (ref.name === name && ref.range) edits.push({ range: ref.range, newText: newName });
+    }
+  }
+  return edits;
+}
+
+/** Every `template.ref: <name>` in `parsed` (an EventListener trigger entry's, or a standalone Trigger's own) pointing at one specific TriggerTemplate identity. */
+export function templateRefIdentityEdits(parsed: ParsedTektonDoc, name: string, newName: string): TextEdit[] {
+  const edits: TextEdit[] = [];
+  for (const trigger of parsed.symbols.triggers) {
+    if (trigger.templateRefName === name && trigger.templateRefNameRange) {
+      edits.push({ range: trigger.templateRefNameRange, newText: newName });
+    }
+  }
+  if (parsed.symbols.kind === "Trigger" && parsed.symbols.templateRefName === name && parsed.symbols.templateRefNameRange) {
+    edits.push({ range: parsed.symbols.templateRefNameRange, newText: newName });
+  }
+  return edits;
+}
+
+/** Every `triggerRef: <name>` in `parsed` (an EventListener trigger entry's) pointing at one specific standalone Trigger identity. */
+export function triggerRefIdentityEdits(parsed: ParsedTektonDoc, name: string, newName: string): TextEdit[] {
+  const edits: TextEdit[] = [];
+  for (const trigger of parsed.symbols.triggers) {
+    if (trigger.triggerRefName === name && trigger.triggerRefNameRange) {
+      edits.push({ range: trigger.triggerRefNameRange, newText: newName });
+    }
+  }
+  return edits;
 }

@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { ParsedTektonDoc, parseTektonDocument, TASK_LIKE_KINDS, TektonKind } from "./model";
+import { ParsedTektonDoc, parseTektonDocument, TASK_LIKE_KINDS, TRIGGER_BINDING_LIKE_KINDS, TektonKind } from "./model";
 import {
   resolveRenameTarget,
   sameDocumentEdits,
@@ -7,12 +7,18 @@ import {
   taskResultReferenceEdits,
   taskRefIdentityEdits,
   pipelineRefIdentityEdits,
+  templateRefIdentityEdits,
+  bindingRefIdentityEdits,
+  triggerRefIdentityEdits,
+  TextEdit,
 } from "./renameTarget";
 import { TektonWorkspaceIndex, IndexedResource } from "./workspaceIndex";
 import { findWorkspaceDocs } from "./workspaceScan";
 import { toVscodeRange } from "./rangeUtils";
 
 const PIPELINE_KIND: ReadonlySet<TektonKind> = new Set(["Pipeline"]);
+const TEMPLATE_KIND: ReadonlySet<TektonKind> = new Set(["TriggerTemplate"]);
+const TRIGGER_KIND: ReadonlySet<TektonKind> = new Set(["Trigger"]);
 
 function toLocation(uri: vscode.Uri, parsed: ParsedTektonDoc, range: [number, number]): vscode.Location {
   return new vscode.Location(uri, toVscodeRange(parsed, range));
@@ -37,10 +43,51 @@ function dedupe(locations: vscode.Location[]): vscode.Location[] {
   });
 }
 
+/** A document kind that can reference an identity by name, and how to find those references within one such document. */
+interface IdentityReferenceScan {
+  kinds: TektonKind[];
+  findEdits: (parsed: ParsedTektonDoc, oldName: string, newName: string) => TextEdit[];
+}
+
+/**
+ * Shared orchestration for "Find All References" on a cross-file identity
+ * name: the declaration site(s) (if `includeDeclaration`), plus every
+ * referencing document, merged and deduped. Read-only, so — unlike
+ * rename.ts's equivalent helper — an ambiguous name isn't a reason to hold
+ * back: every candidate declaration is included rather than rejected. The
+ * pieces that differ per identity kind are passed in, since this one shape
+ * now serves 5 identity kinds (Task, Pipeline, TriggerTemplate,
+ * TriggerBinding-family, Trigger).
+ */
+async function collectIdentityReferences(
+  document: vscode.TextDocument,
+  currentParsed: ParsedTektonDoc,
+  name: string,
+  ownKinds: ReadonlySet<TektonKind>,
+  lookupAllRecords: (name: string) => IndexedResource[],
+  includeDeclaration: boolean,
+  referencingScans: IdentityReferenceScan[]
+): Promise<vscode.Location[]> {
+  const locations: vscode.Location[] = [];
+  if (includeDeclaration) {
+    addIdentityDeclarations(locations, lookupAllRecords(name), document, currentParsed, name, ownKinds);
+  }
+
+  for (const scan of referencingScans) {
+    const referencingDocs = await findWorkspaceDocs(scan.kinds);
+    for (const { uri, parsed: refParsed } of referencingDocs) {
+      for (const range of noopRename(scan.findEdits(refParsed, name, name))) {
+        locations.push(toLocation(uri, refParsed, range));
+      }
+    }
+  }
+  return dedupe(locations);
+}
+
 /**
  * "Find All References" (Shift+F12). Same-document entities (params,
  * workspaces, task aliases) are scoped to the current file. A Task's own
- * result and a Task/Pipeline's own identity search the whole workspace,
+ * result and a resource's own identity search the whole workspace,
  * resolving the same targets `rename.ts` does — except an ambiguous name
  * is searched across every candidate and merged rather than rejected,
  * since this is read-only.
@@ -90,29 +137,60 @@ export class TektonReferenceProvider implements vscode.ReferenceProvider {
         return dedupe(locations);
       }
 
-      case "task-identity": {
-        const records = this.workspaceIndex.lookupAllTaskRecords(target.name);
-        if (context.includeDeclaration) addIdentityDeclarations(locations, records, document, parsed, target.name, TASK_LIKE_KINDS);
-        const referencingDocs = await findWorkspaceDocs(["Pipeline", "TaskRun"]);
-        for (const { uri, parsed: refParsed } of referencingDocs) {
-          for (const range of noopRename(taskRefIdentityEdits(refParsed, target.name, target.name))) {
-            locations.push(toLocation(uri, refParsed, range));
-          }
-        }
-        return dedupe(locations);
-      }
+      case "task-identity":
+        return collectIdentityReferences(
+          document,
+          parsed,
+          target.name,
+          TASK_LIKE_KINDS,
+          (n) => this.workspaceIndex.lookupAllTaskRecords(n),
+          context.includeDeclaration,
+          [{ kinds: ["Pipeline", "TaskRun"], findEdits: taskRefIdentityEdits }]
+        );
 
-      case "pipeline-identity": {
-        const records = this.workspaceIndex.lookupAllPipelineRecords(target.name);
-        if (context.includeDeclaration) addIdentityDeclarations(locations, records, document, parsed, target.name, PIPELINE_KIND);
-        const referencingDocs = await findWorkspaceDocs(["PipelineRun"]);
-        for (const { uri, parsed: refParsed } of referencingDocs) {
-          for (const range of noopRename(pipelineRefIdentityEdits(refParsed, target.name, target.name))) {
-            locations.push(toLocation(uri, refParsed, range));
-          }
-        }
-        return dedupe(locations);
-      }
+      case "pipeline-identity":
+        return collectIdentityReferences(
+          document,
+          parsed,
+          target.name,
+          PIPELINE_KIND,
+          (n) => this.workspaceIndex.lookupAllPipelineRecords(n),
+          context.includeDeclaration,
+          [{ kinds: ["PipelineRun"], findEdits: pipelineRefIdentityEdits }]
+        );
+
+      case "template-identity":
+        return collectIdentityReferences(
+          document,
+          parsed,
+          target.name,
+          TEMPLATE_KIND,
+          (n) => this.workspaceIndex.lookupAllTriggerTemplateRecords(n),
+          context.includeDeclaration,
+          [{ kinds: ["EventListener", "Trigger"], findEdits: templateRefIdentityEdits }]
+        );
+
+      case "binding-identity":
+        return collectIdentityReferences(
+          document,
+          parsed,
+          target.name,
+          TRIGGER_BINDING_LIKE_KINDS,
+          (n) => this.workspaceIndex.lookupAllTriggerBindingRecords(n),
+          context.includeDeclaration,
+          [{ kinds: ["EventListener", "Trigger"], findEdits: bindingRefIdentityEdits }]
+        );
+
+      case "trigger-identity":
+        return collectIdentityReferences(
+          document,
+          parsed,
+          target.name,
+          TRIGGER_KIND,
+          (n) => this.workspaceIndex.lookupAllTriggerRecords(n),
+          context.includeDeclaration,
+          [{ kinds: ["EventListener"], findEdits: triggerRefIdentityEdits }]
+        );
     }
   }
 }
