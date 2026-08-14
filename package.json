@@ -4,6 +4,7 @@
   "description": "Quality-of-life tooling for authoring Tekton Pipelines: parameter/workspace/result validation, highlighting, and smart editing commands. Helm-template aware (but not very aware).",
   "version": "0.1.0",
   "publisher": "tekton-intellisense",
+  "repository": {"url": "https://github.com/Morlock-Collective/tekton-intellisense"},
   "private": true,
   "engines": {
     "vscode": "^1.85.0"
