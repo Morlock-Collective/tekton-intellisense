@@ -1,7 +1,7 @@
 {
   "name": "tekton-intellisense",
-  "displayName": "Tekton Intellisense",
-  "description": "Quality-of-life tooling for authoring Tekton Pipelines: parameter/workspace/result validation, highlighting, and smart editing commands. Helm-template aware.",
+  "displayName": "Unofficial Tekton Intellisense",
+  "description": "Quality-of-life tooling for authoring Tekton Pipelines: parameter/workspace/result validation, highlighting, and smart editing commands. Helm-template aware (but not very aware).",
   "version": "0.1.0",
   "publisher": "tekton-intellisense",
   "private": true,
