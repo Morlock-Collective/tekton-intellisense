@@ -260,6 +260,16 @@ export class TektonWorkspaceIndex implements vscode.Disposable {
     return this.lookupAllRecords("trigger", name);
   }
 
+  /** Every known Task/ClusterTask/StepAction name, for taskRef.name completion. */
+  allTaskNames(): string[] {
+    return this.allNames("task");
+  }
+
+  /** Every known Pipeline name, for pipelineRef.name completion. */
+  allPipelineNames(): string[] {
+    return this.allNames("pipeline");
+  }
+
   /** Every known TriggerTemplate/TriggerBinding-family/Trigger name, for "did you mean" suggestions on an unresolved ref. */
   allTriggerTemplateNames(): string[] {
     return this.allNames("triggerTemplate");

@@ -1113,5 +1113,155 @@ console.log("\nrename target resolution: cursor on an EventListener's bindings[]
   if (!ok) failures++;
 }
 
+console.log("\nCompletion provider: $(...) trigger refs and identity ref-name fields:");
+{
+  // completions.ts imports "vscode" (for Range/Position/CompletionItem) but the logic under
+  // test doesn't touch anything else from the API, so a minimal in-process shim is enough to
+  // load and drive the real provider class here, same as everywhere else in this harness.
+  class Position {
+    constructor(line, character) {
+      this.line = line;
+      this.character = character;
+    }
+  }
+  class Range {
+    constructor(a, b, c, d) {
+      if (typeof a === "number") {
+        this.start = new Position(a, b);
+        this.end = new Position(c, d);
+      } else {
+        this.start = a;
+        this.end = b;
+      }
+    }
+  }
+  class CompletionItem {
+    constructor(label, kind) {
+      this.label = label;
+      this.kind = kind;
+    }
+  }
+  const vscodeShim = { Position, Range, CompletionItem, CompletionItemKind: new Proxy({}, { get: () => 0 }) };
+
+  const Module = require("module");
+  const originalLoad = Module._load;
+  Module._load = function (request, ...rest) {
+    if (request === "vscode") return vscodeShim;
+    return originalLoad.call(this, request, ...rest);
+  };
+  const { TektonRefCompletionProvider } = require("../out/tekton/completions");
+  Module._load = originalLoad;
+
+  function makeDocument(text) {
+    const lines = text.split("\n");
+    const lineOffsets = [0];
+    for (const l of lines.slice(0, -1)) lineOffsets.push(lineOffsets[lineOffsets.length - 1] + l.length + 1);
+    return {
+      getText: () => text,
+      lineAt: (line) => ({ text: lines[line] }),
+      offsetAt: (pos) => lineOffsets[pos.line] + pos.character,
+      positionAt: (offset) => {
+        let line = 0;
+        while (line + 1 < lineOffsets.length && lineOffsets[line + 1] <= offset) line++;
+        return new Position(line, offset - lineOffsets[line]);
+      },
+    };
+  }
+
+  /** Completes at the end of the first line containing `needle`. */
+  function completeAt(text, needle, workspaceIndex) {
+    const doc = makeDocument(text);
+    const lineIdx = text.split("\n").findIndex((l) => l.includes(needle));
+    if (lineIdx === -1) throw new Error(`fixture line containing ${JSON.stringify(needle)} not found`);
+    const line = text.split("\n")[lineIdx];
+    const position = new Position(lineIdx, line.length);
+    const provider = new TektonRefCompletionProvider(workspaceIndex ?? {});
+    return (provider.provideCompletionItems(doc, position) ?? []).map((i) => i.label);
+  }
+
+  const noopIndex = {
+    allTaskNames: () => [],
+    allPipelineNames: () => [],
+    allTriggerTemplateNames: () => [],
+    allTriggerBindingNames: () => [],
+    allTriggerNames: () => [],
+  };
+
+  const ttSource = fs.readFileSync(path.join(__dirname, "triggertemplate.yaml"), "utf8");
+  const ttTop = completeAt(ttSource.replace("$(uid)", "$("), "generateName", noopIndex);
+  const ttParamsPartial = completeAt(ttSource.replace("$(tt.params.gitrevision)", "$(tt.params."), "$(tt.params.", noopIndex);
+
+  const okTt = ttTop.includes("tt") && ttTop.includes("uid") && ttParamsPartial.includes("gitrevision") && ttParamsPartial.includes("gitrepositoryurl");
+  console.log(`  [${okTt ? "PASS" : "FAIL"}] TriggerTemplate: top-level offers tt/uid (${JSON.stringify(ttTop)}), $(tt.params. offers declared params (${JSON.stringify(ttParamsPartial)})`);
+  if (!okTt) failures++;
+
+  const tbSource = fs.readFileSync(path.join(__dirname, "triggerbinding.yaml"), "utf8");
+  const tbTop = completeAt(tbSource.replace("$(body.head_commit.id)", "$("), "$(", noopIndex);
+  const okTb = ["body", "header", "extensions", "context"].every((k) => tbTop.includes(k));
+  console.log(`  [${okTb ? "PASS" : "FAIL"}] TriggerBinding: top-level offers body/header/extensions/context (${JSON.stringify(tbTop)})`);
+  if (!okTb) failures++;
+
+  const namedIndex = {
+    ...noopIndex,
+    allTriggerBindingNames: () => ["github-binding", "other-binding"],
+    allTriggerTemplateNames: () => ["build-template", "other-template"],
+    allTriggerNames: () => ["build-trigger", "other-trigger"],
+    allTaskNames: () => ["build-image", "other-task"],
+    allPipelineNames: () => ["build-and-deploy", "other-pipeline"],
+  };
+
+  const elSource = fs.readFileSync(path.join(__dirname, "eventlistener-crossfile.yaml"), "utf8");
+  const bindingCompletions = completeAt(elSource.replace("github-binding", "github-b"), "github-b", namedIndex);
+  const templateCompletions = completeAt(elSource.replace("build-template", "build-t"), "build-t", namedIndex);
+  const okIdentityEl =
+    bindingCompletions.includes("github-binding") &&
+    bindingCompletions.includes("other-binding") &&
+    templateCompletions.includes("build-template");
+  console.log(
+    `  [${okIdentityEl ? "PASS" : "FAIL"}] EventListener: bindings[].ref completion (${JSON.stringify(bindingCompletions)}), template.ref completion (${JSON.stringify(templateCompletions)})`
+  );
+  if (!okIdentityEl) failures++;
+
+  const triggerRefSource = fs.readFileSync(path.join(__dirname, "eventlistener.yaml"), "utf8");
+  const triggerRefCompletions = completeAt(triggerRefSource.replace("build-trigger", "build-t"), "build-t", namedIndex);
+  const okTriggerRef = triggerRefCompletions.includes("build-trigger") && triggerRefCompletions.includes("other-trigger");
+  console.log(`  [${okTriggerRef ? "PASS" : "FAIL"}] EventListener: triggerRef completion (${JSON.stringify(triggerRefCompletions)})`);
+  if (!okTriggerRef) failures++;
+
+  // Minimal Pipeline + PipelineRun snippets, rather than relying on fixture internals matching exactly.
+  const pipelineSnippet = [
+    "apiVersion: tekton.dev/v1",
+    "kind: Pipeline",
+    "metadata:",
+    "  name: p",
+    "spec:",
+    "  tasks:",
+    "    - name: build",
+    "      taskRef:",
+    "        name: build-i",
+  ].join("\n");
+  const taskRefCompletions = completeAt(pipelineSnippet, "build-i", namedIndex);
+
+  const pipelineRunSnippet = [
+    "apiVersion: tekton.dev/v1",
+    "kind: PipelineRun",
+    "metadata:",
+    "  name: pr",
+    "spec:",
+    "  pipelineRef:",
+    "    name: build-a",
+  ].join("\n");
+  const pipelineRefCompletions = completeAt(pipelineRunSnippet, "build-a", namedIndex);
+
+  const okIdentityTask =
+    taskRefCompletions.includes("build-image") &&
+    taskRefCompletions.includes("other-task") &&
+    pipelineRefCompletions.includes("build-and-deploy");
+  console.log(
+    `  [${okIdentityTask ? "PASS" : "FAIL"}] Pipeline: taskRef.name completion (${JSON.stringify(taskRefCompletions)}), PipelineRun: pipelineRef.name completion (${JSON.stringify(pipelineRefCompletions)})`
+  );
+  if (!okIdentityTask) failures++;
+}
+
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) FAILED.`);
 process.exit(failures === 0 ? 0 : 1);

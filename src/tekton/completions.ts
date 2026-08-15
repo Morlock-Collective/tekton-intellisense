@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { parseTektonDocument, ParsedTektonDoc } from "./model";
+import { parseTektonDocument, ParsedTektonDoc, TASK_LIKE_KINDS, TektonSymbols, TRIGGER_BINDING_LIKE_KINDS } from "./model";
 import { TektonWorkspaceIndex } from "./workspaceIndex";
 import { CONTEXT_TREE } from "./contextVariables";
 
@@ -38,6 +38,75 @@ function getRefContext(document: vscode.TextDocument, position: vscode.Position)
   return { replaceRange, segments };
 }
 
+interface IdentityRefContext {
+  /** offset range of the plain-scalar ref-name value under the cursor */
+  range: [number, number];
+  detail: string;
+  names: (index: TektonWorkspaceIndex) => string[];
+}
+
+function inOffsetRange(range: [number, number] | undefined, offset: number): boolean {
+  return !!range && offset >= range[0] && offset <= range[1];
+}
+
+/**
+ * Finds a plain-scalar identity ref-name field (`taskRef.name`,
+ * `pipelineRef.name`, `bindings[].ref`, `template.ref`, `triggerRef`) at
+ * `offset`, if any. Unlike `$(...)` refs, these have no delimiter to trigger
+ * off of — VS Code invokes completion on ordinary word characters, so this
+ * only finds anything once at least one character of the name is typed
+ * (matching the field ranges `model.ts` computes: an empty/unwritten scalar
+ * has no name to derive a range from).
+ */
+function identityRefContextAt(symbols: TektonSymbols, offset: number): IdentityRefContext | undefined {
+  for (const t of symbols.tasks) {
+    if (inOffsetRange(t.taskRefNameRange, offset)) {
+      return { range: t.taskRefNameRange!, detail: "Task/ClusterTask/StepAction", names: (i) => i.allTaskNames() };
+    }
+  }
+  if (symbols.kind === "TaskRun" && inOffsetRange(symbols.taskRefNameRange, offset)) {
+    return { range: symbols.taskRefNameRange!, detail: "Task/ClusterTask/StepAction", names: (i) => i.allTaskNames() };
+  }
+  if (symbols.kind === "PipelineRun" && inOffsetRange(symbols.pipelineRefNameRange, offset)) {
+    return { range: symbols.pipelineRefNameRange!, detail: "Pipeline", names: (i) => i.allPipelineNames() };
+  }
+
+  for (const trigger of symbols.triggers) {
+    for (const ref of trigger.bindingRefs) {
+      if (inOffsetRange(ref.range, offset)) {
+        return {
+          range: ref.range!,
+          detail: "TriggerBinding/ClusterTriggerBinding",
+          names: (i) => i.allTriggerBindingNames(),
+        };
+      }
+    }
+    if (inOffsetRange(trigger.templateRefNameRange, offset)) {
+      return { range: trigger.templateRefNameRange!, detail: "TriggerTemplate", names: (i) => i.allTriggerTemplateNames() };
+    }
+    if (inOffsetRange(trigger.triggerRefNameRange, offset)) {
+      return { range: trigger.triggerRefNameRange!, detail: "Trigger", names: (i) => i.allTriggerNames() };
+    }
+  }
+
+  if (symbols.kind === "Trigger") {
+    if (inOffsetRange(symbols.templateRefNameRange, offset)) {
+      return { range: symbols.templateRefNameRange!, detail: "TriggerTemplate", names: (i) => i.allTriggerTemplateNames() };
+    }
+    for (const ref of symbols.bindingRefs) {
+      if (inOffsetRange(ref.range, offset)) {
+        return {
+          range: ref.range!,
+          detail: "TriggerBinding/ClusterTriggerBinding",
+          names: (i) => i.allTriggerBindingNames(),
+        };
+      }
+    }
+  }
+
+  return undefined;
+}
+
 function item(
   label: string,
   range: vscode.Range,
@@ -50,6 +119,45 @@ function item(
   return ci;
 }
 
+/** `$(tt.params.NAME)` / `$(uid)` — a TriggerTemplate's own resourcetemplates. */
+function triggerTemplateCompletions(
+  segments: string[],
+  replaceRange: vscode.Range,
+  symbols: TektonSymbols
+): vscode.CompletionItem[] {
+  if (segments.length === 0) {
+    return [
+      item("tt", replaceRange, vscode.CompletionItemKind.Module, "This TriggerTemplate's own declared parameter"),
+      item("uid", replaceRange, vscode.CompletionItemKind.Constant, "Random value, unique per trigger invocation"),
+    ];
+  }
+  if (segments[0] === "tt") {
+    if (segments.length === 1) {
+      return [item("params", replaceRange, vscode.CompletionItemKind.Module, "Declared parameter")];
+    }
+    if (segments.length === 2 && segments[1] === "params") {
+      return symbols.params.map((p) => item(p.name, replaceRange, vscode.CompletionItemKind.Variable, "param"));
+    }
+  }
+  return [];
+}
+
+/** `$(body...)` / `$(header...)` / `$(extensions...)` / `$(context...)` — a TriggerBinding's value expressions. */
+function triggerBindingCompletions(segments: string[], replaceRange: vscode.Range): vscode.CompletionItem[] {
+  if (segments.length === 0) {
+    return [
+      item("body", replaceRange, vscode.CompletionItemKind.Module, "Incoming webhook payload body"),
+      item("header", replaceRange, vscode.CompletionItemKind.Module, "Incoming webhook request header"),
+      item("extensions", replaceRange, vscode.CompletionItemKind.Module, "Interceptor-added extension fields"),
+      item("context", replaceRange, vscode.CompletionItemKind.Module, "Built-in EventListener context"),
+    ];
+  }
+  // body/header/extensions/context are arbitrary paths into the incoming webhook payload, which
+  // has no declared schema here to complete against -- same reason diagnostics.ts never flags
+  // these as "unknown" either.
+  return [];
+}
+
 export class TektonRefCompletionProvider implements vscode.CompletionItemProvider {
   static readonly triggerCharacters = ["(", "."];
 
@@ -59,20 +167,39 @@ export class TektonRefCompletionProvider implements vscode.CompletionItemProvide
     document: vscode.TextDocument,
     position: vscode.Position
   ): vscode.CompletionItem[] | undefined {
-    const ctx = getRefContext(document, position);
-    if (!ctx) return undefined;
-
     const parsed = parseTektonDocument(document.getText());
     if (!parsed) return undefined;
 
-    return this.completionsFor(ctx, parsed);
+    const ctx = getRefContext(document, position);
+    if (ctx) return this.completionsFor(ctx, parsed);
+
+    return this.identityCompletionsFor(document, position, parsed.symbols);
+  }
+
+  private identityCompletionsFor(
+    document: vscode.TextDocument,
+    position: vscode.Position,
+    symbols: TektonSymbols
+  ): vscode.CompletionItem[] | undefined {
+    const target = identityRefContextAt(symbols, document.offsetAt(position));
+    if (!target) return undefined;
+
+    const replaceRange = new vscode.Range(document.positionAt(target.range[0]), document.positionAt(target.range[1]));
+    return target.names(this.workspaceIndex).map((name) => item(name, replaceRange, vscode.CompletionItemKind.Reference, target.detail));
   }
 
   private completionsFor(ctx: RefContext, parsed: ParsedTektonDoc): vscode.CompletionItem[] {
     const { segments, replaceRange } = ctx;
     const { symbols } = parsed;
+
+    if (symbols.kind === "TriggerTemplate") return triggerTemplateCompletions(segments, replaceRange, symbols);
+    if (TRIGGER_BINDING_LIKE_KINDS.has(symbols.kind)) return triggerBindingCompletions(segments, replaceRange);
+
     const isPipeline = symbols.kind === "Pipeline";
-    const isTaskLike = symbols.kind === "Task" || symbols.kind === "ClusterTask" || symbols.kind === "StepAction";
+    const isTaskLike = TASK_LIKE_KINDS.has(symbols.kind);
+    // EventListener/Trigger have no $(...) reference syntax of their own — their ref fields
+    // (bindings[].ref, template.ref, triggerRef) are plain scalars, handled by identityCompletionsFor.
+    if (!isPipeline && !isTaskLike) return [];
 
     if (segments.length === 0) {
       const items = [item("params", replaceRange, vscode.CompletionItemKind.Module, "Declared parameter")];

@@ -1,6 +1,7 @@
 .vscode/**
 .claude/**
 .gitignore
+HANDOFF.md
 src/**
 out/**
 node_modules/**

@@ -105,9 +105,22 @@ collision/ambiguity warnings, cross-file scan) was factored into one
 shared function each, used by all 5 identity kinds now instead of just
 Task/Pipeline. TriggerBinding's `value:` expressions
 (`$(body...)`/`$(header...)`/`$(extensions...)`) are recognized and
-highlighted but never validated — see Known limitations. Completions and
-an EventListener/Trigger↔TriggerTemplate param-wiring check are follow-up
+highlighted but never validated — see Known limitations. An
+EventListener/Trigger↔TriggerTemplate param-wiring check is follow-up
 work, not part of this pass — see Next up.
+
+**Trigger completions** — `$(tt.params.` (against the TriggerTemplate's own
+declared params) and top-level `$(tt`/`$(uid`/`$(body`/`$(header`/
+`$(extensions`/`$(context` namespace completion, reusing the existing
+`$(...)`-triggered provider now made kind-aware (it no longer offers
+Pipeline/Task namespaces like `params`/`tasks` inside a Trigger-family
+document). `bindings[].ref`, `template.ref`, and `triggerRef` — plain YAML
+scalars, not `$(...)` — get completion too, resolved workspace-wide via
+`workspaceIndex.ts` the same way their "unknown ref" diagnostic already is;
+the same treatment was extended to the pre-existing `taskRef.name`/
+`pipelineRef.name` gap while in there. Body/header/extensions/context paths
+past the top-level namespace aren't completed — same reason they aren't
+diagnosed as unknown (no declared schema for the incoming webhook payload).
 
 ## Notable bugs found and fixed along the way
 
@@ -174,13 +187,9 @@ work, not part of this pass — see Next up.
 
 ## Next up
 
-- [ ] Publish to the VS Code Marketplace / Open VSX.
-- [ ] Completions for `$(tt.params.`/`$(uid)`/`$(body...)` etc., and
-      EventListener/Trigger ref-name completion (`bindings[].ref`,
-      `template.ref`, `triggerRef`) — the latter is a new completion-trigger
-      shape (a plain YAML scalar, not `$(...)`) that ordinary Pipeline/Task
-      authoring has the same gap for (`taskRef.name`, `pipelineRef.name`),
-      worth solving once rather than per resource kind.
 - [ ] Cross-resource check: does every *required* TriggerTemplate param (no
       default) actually get provided by name from at least one of an
       EventListener/Trigger's bound TriggerBindings.
+
+Publishing to the VS Code Marketplace / Open VSX is being done manually by
+the maintainer once a release is judged stable — not tracked here.
