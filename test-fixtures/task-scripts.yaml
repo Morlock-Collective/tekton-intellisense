@@ -1,0 +1,46 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: multi-script
+spec:
+  params:
+    - name: image
+      type: string
+  steps:
+    - name: bash-step
+      script: |
+        #!/usr/bin/env bash
+        set -e
+        echo $(params.image)
+        if true; then
+          echo nested
+        fi
+    - name: python-step
+      image: python:3
+      script: |
+        #!/usr/bin/env python3
+        import sys
+        target = "$(params.image)"
+        def main():
+            print(target)
+        main()
+    - name: node-step
+      script: |
+        #!/usr/bin/env node
+        console.log("$(params.image)");
+    - name: no-shebang-step
+      script: |
+        echo "no shebang here"
+    - name: unknown-shebang-step
+      script: |
+        #!/usr/bin/env made-up-lang
+        do something weird
+    - name: sidecar-like-indent-step
+      script: |
+            #!/usr/bin/env bash
+            echo "deeper indent"
+  sidecars:
+    - name: bash-sidecar
+      script: |
+        #!/bin/sh
+        echo sidecar

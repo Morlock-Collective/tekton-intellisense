@@ -19,6 +19,7 @@ const { closestMatch } = require("../out/tekton/levenshtein");
 const { findDuplicateGroups } = require("../out/tekton/duplicates");
 const { findMissingRunAfter } = require("../out/tekton/runAfterCheck");
 const { blockAfterText, quoteYamlString } = require("../out/commands/snippetText");
+const { findEmbeddedScriptBlocks, detectShebangLanguage, reindentScriptContent } = require("../out/tekton/scriptEmbed");
 const {
   resolveRenameTarget,
   sameDocumentEdits,
@@ -1261,6 +1262,93 @@ console.log("\nCompletion provider: $(...) trigger refs and identity ref-name fi
     `  [${okIdentityTask ? "PASS" : "FAIL"}] Pipeline: taskRef.name completion (${JSON.stringify(taskRefCompletions)}), PipelineRun: pipelineRef.name completion (${JSON.stringify(pipelineRefCompletions)})`
   );
   if (!okIdentityTask) failures++;
+}
+
+console.log("\nEmbedded script block detection (scriptEmbed.ts):");
+{
+  const source = fs.readFileSync(path.join(__dirname, "task-scripts.yaml"), "utf8");
+  const parsed = parseTektonDocument(source);
+  const blocks = findEmbeddedScriptBlocks(parsed);
+
+  const byLang = blocks.map((b) => b.languageId);
+  const okCount = blocks.length === 5;
+  console.log(
+    `  [${okCount ? "PASS" : "FAIL"}] 5 of 7 step/sidecar scripts recognized (no-shebang and unknown-shebang skipped): got ${blocks.length} -> ${JSON.stringify(byLang)}`
+  );
+  if (!okCount) failures++;
+
+  const bash = blocks.find((b) => b.interpreter === "bash" && b.containerName === "bash-step");
+  const python = blocks.find((b) => b.languageId === "python");
+  const node = blocks.find((b) => b.languageId === "javascript");
+  const shellBlocks = blocks.filter((b) => b.languageId === "shellscript");
+
+  const okLang = !!bash && !!python && !!node && shellBlocks.length === 3;
+  console.log(
+    `  [${okLang ? "PASS" : "FAIL"}] language ids: bash-step/sidecar-like-indent-step/bash-sidecar=shellscript (${shellBlocks.length}), python-step=python, node-step=javascript`
+  );
+  if (!okLang) failures++;
+
+  const okContainerNames = bash?.containerName === "bash-step" && python?.containerName === "python-step";
+  console.log(`  [${okContainerNames ? "PASS" : "FAIL"}] containerName carries the step's own name (bash-step="${bash?.containerName}", python-step="${python?.containerName}")`);
+  if (!okContainerNames) failures++;
+
+  const okDedent = bash?.rawContent.startsWith("#!/usr/bin/env bash\nset -e\necho $(params.image)\nif true; then\n  echo nested\nfi");
+  console.log(`  [${okDedent ? "PASS" : "FAIL"}] bash-step rawContent dedented, nested "if" body keeps its relative 2-space indent`);
+  if (!okDedent) {
+    console.log({ rawContent: bash?.rawContent });
+    failures++;
+  }
+
+  const okBashUnmasked = !!bash && bash.content.includes("$(params.image)") && bash.rawContent.includes("$(params.image)");
+  const okPythonMasked =
+    !!python &&
+    !python.content.includes("$(params.image)") &&
+    python.content.includes("_".repeat("$(params.image)".length)) &&
+    python.rawContent.includes("$(params.image)"); // rawContent must stay unmasked -- it's what gets written back on save
+  console.log(`  [${okBashUnmasked && okPythonMasked ? "PASS" : "FAIL"}] shellscript leaves $(...) unmasked in both content/rawContent, python masks only content (rawContent stays intact for writeback)`);
+  if (!(okBashUnmasked && okPythonMasked)) failures++;
+
+  const vOffset = bash.rawContent.indexOf("params.image");
+  const hOffset = bash.toHostOffset(vOffset);
+  const okVirtualToHost = source.slice(hOffset, hOffset + "params.image".length) === "params.image";
+  console.log(`  [${okVirtualToHost ? "PASS" : "FAIL"}] bash-step: virtual->host offset round-trip for "params.image"`);
+  if (!okVirtualToHost) failures++;
+
+  const deepIndentBlock = blocks.find((b) => b.languageId === "shellscript" && b.rawContent.includes("deeper indent"));
+  const deepHOffset = source.indexOf("deeper indent");
+  const deepVOffset = deepIndentBlock?.toVirtualOffset(deepHOffset);
+  const okHostToVirtual =
+    deepVOffset !== undefined && deepIndentBlock.rawContent.slice(deepVOffset, deepVOffset + "deeper indent".length) === "deeper indent";
+  console.log(`  [${okHostToVirtual ? "PASS" : "FAIL"}] deep-indent step: host->virtual offset round-trip for "deeper indent", indent=${deepIndentBlock?.indent}`);
+  if (!okHostToVirtual) failures++;
+
+  const okUnknown = detectShebangLanguage("#!/usr/bin/env made-up-lang\necho hi") === undefined;
+  console.log(`  [${okUnknown ? "PASS" : "FAIL"}] unrecognized shebang interpreter yields no language`);
+  if (!okUnknown) failures++;
+
+  const okNoShebang = detectShebangLanguage("echo no shebang here") === undefined;
+  console.log(`  [${okNoShebang ? "PASS" : "FAIL"}] missing shebang yields no language`);
+  if (!okNoShebang) failures++;
+
+  // Round-trip: dedent (via rawContent) then reindent should reproduce the original indented block exactly.
+  const reindented = reindentScriptContent(bash.rawContent, bash.indent);
+  const originalIndentedContent = source.slice(bash.hostRange[0], bash.hostRange[1]);
+  const okRoundTrip = reindented === originalIndentedContent;
+  console.log(`  [${okRoundTrip ? "PASS" : "FAIL"}] reindentScriptContent(rawContent, indent) reproduces the original indented block exactly`);
+  if (!okRoundTrip) {
+    console.log({ reindented, originalIndentedContent });
+    failures++;
+  }
+
+  const deepReindented = reindentScriptContent(deepIndentBlock.rawContent, deepIndentBlock.indent);
+  const deepOriginal = source.slice(deepIndentBlock.hostRange[0], deepIndentBlock.hostRange[1]);
+  const okDeepRoundTrip = deepReindented === deepOriginal;
+  console.log(`  [${okDeepRoundTrip ? "PASS" : "FAIL"}] reindentScriptContent round-trips the deeper-indented block too`);
+  if (!okDeepRoundTrip) failures++;
+
+  const okReindentEdited = reindentScriptContent("echo hi\n\necho bye", 4) === "    echo hi\n\n    echo bye\n";
+  console.log(`  [${okReindentEdited ? "PASS" : "FAIL"}] reindentScriptContent leaves blank lines blank (no trailing whitespace) and always ends with one newline`);
+  if (!okReindentEdited) failures++;
 }
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) FAILED.`);
