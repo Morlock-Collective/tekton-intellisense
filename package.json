@@ -58,6 +58,10 @@
       {
         "command": "tekton-intellisense.addParameter",
         "title": "Tekton: Add Parameter"
+      },
+      {
+        "command": "tekton-intellisense.editTaskScript",
+        "title": "Tekton: Edit Task Script"
       }
     ],
     "menus": {
@@ -79,6 +83,11 @@
         },
         {
           "command": "tekton-intellisense.addParameter",
+          "when": "tektonAid.active",
+          "group": "tektonAid"
+        },
+        {
+          "command": "tekton-intellisense.editTaskScript",
           "when": "tektonAid.active",
           "group": "tektonAid"
         }

@@ -14,6 +14,7 @@ import { bindParamToEnvCommand } from "./commands/bindParamToEnv";
 import { addTaskCommand } from "./commands/addTask";
 import { addConditionalCommand } from "./commands/addConditional";
 import { addParameterCommand } from "./commands/addParameter";
+import { disposeEditTaskScript, editTaskScriptCommand, initEditTaskScript, registerScriptWriteback } from "./commands/editTaskScript";
 
 const YAML_LIKE = /\.(ya?ml)$/i;
 
@@ -142,8 +143,12 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("tekton-intellisense.bindParamToEnv", bindParamToEnvCommand),
     vscode.commands.registerCommand("tekton-intellisense.addTask", addTaskCommand),
     vscode.commands.registerCommand("tekton-intellisense.addConditional", addConditionalCommand),
-    vscode.commands.registerCommand("tekton-intellisense.addParameter", addParameterCommand)
+    vscode.commands.registerCommand("tekton-intellisense.addParameter", addParameterCommand),
+    vscode.commands.registerCommand("tekton-intellisense.editTaskScript", editTaskScriptCommand)
   );
+
+  initEditTaskScript(context.globalStorageUri);
+  registerScriptWriteback(context);
 }
 
 export function deactivate(): void {
@@ -152,4 +157,5 @@ export function deactivate(): void {
   diagnosticCollection?.dispose();
   statusBar?.dispose();
   disposeDecorations();
+  disposeEditTaskScript();
 }
