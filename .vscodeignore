@@ -1,10 +1,14 @@
 .vscode/**
+.claude/**
 .gitignore
 src/**
+out/**
+node_modules/**
 test-fixtures/**
 docs/**
 tsconfig.json
 eslint.config.js
+esbuild.js
 package-lock.json
 *.map
 .git/**

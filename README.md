@@ -2,17 +2,13 @@
 
 A VS Code extension that makes hand-authoring [Tekton](https://tekton.dev)
 `Pipeline`/`Task`/`PipelineRun`/`TaskRun` and Tekton Triggers
-`EventListener`/`Trigger`/`TriggerTemplate`/`TriggerBinding` YAML less
-miserable — not by replacing the editor with a graphical designer, but by
-making the text editor smarter about the domain: it knows what a
-`$(params.foo)` reference is, whether `foo` actually exists, and how to
-insert the boilerplate you retype constantly.
+`EventListener`/`Trigger`/`TriggerTemplate`/`TriggerBinding` YAML slightly less
+miserable.
 
-It is Helm-aware: charts that keep Tekton resources under `templates/` with
-`{{ ... }}` actions are parsed by masking template actions in place (see
-`src/tekton/helmMask.ts`) rather than requiring a rendered chart, so
-line/column positions in diagnostics always point at your actual source
-file.
+It is Helm-"aware" to some extent: charts that keep Tekton resources under `templates/` with
+`{{ ... }}` actions are parsed by masking template actions rather than requiring a rendered chart, 
+so line/column positions in diagnostics always point at your actual source file. This may be an area
+of future improvement.
 
 ## Features
 
