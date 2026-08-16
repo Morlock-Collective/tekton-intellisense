@@ -194,7 +194,12 @@ export function findEmbeddedScriptBlocks(parsed: ParsedTektonDoc): EmbeddedScrip
   for (const entry of stepAndSidecarEntryMaps(parsed)) {
     const scriptNode = entry.get("script", true);
     const nameNode = entry.get("name", true);
-    const containerName = isScalar(nameNode) && typeof nameNode.value === "string" ? nameNode.value : undefined;
+    // A standalone StepAction's one implicit "step" (its own spec) has no `name:` field of its
+    // own to identify it by -- fall back to the resource's own metadata.name instead, so the
+    // picker/writeback identification still has something meaningful to key off of.
+    const containerName =
+      (isScalar(nameNode) && typeof nameNode.value === "string" ? nameNode.value : undefined) ??
+      (parsed.symbols.kind === "StepAction" ? parsed.symbols.metadataName : undefined);
     const block = buildScriptBlock(parsed.text, scriptNode, containerName);
     if (block) blocks.push(block);
   }

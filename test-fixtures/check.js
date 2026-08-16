@@ -2005,6 +2005,31 @@ console.log("\nPipeline task entry's inline taskSpec: steps/sidecars recognized 
   if (!okBlocks) failures++;
 }
 
+console.log("\nStandalone StepAction: its own spec *is* the one step (no steps:/sidecars: list of its own):");
+{
+  // A StepAction's script/image/env/... live directly on spec, unlike Task/ClusterTask/
+  // TaskRun-inline-taskSpec, which nest those under a steps:/sidecars: list entry.
+  // all-kinds-multidoc.yaml's mdk-stepaction is the very first document in the file.
+  const source = fs.readFileSync(path.join(__dirname, "all-kinds-multidoc.yaml"), "utf8");
+  const stepAction = parseTektonFile(source).find((d) => d.symbols.metadataName === "mdk-stepaction");
+
+  const entries = stepAndSidecarEntryMaps(stepAction);
+  const okEntry = entries.length === 1;
+  console.log(`  [${okEntry ? "PASS" : "FAIL"}] stepAndSidecarEntryMaps treats the StepAction's own spec as its one step (${entries.length} entr(y/ies))`);
+  if (!okEntry) failures++;
+
+  const scriptOffset = source.indexOf('echo "linting..."');
+  const okFind = !!findEnclosingStepEntry(stepAction, scriptOffset);
+  console.log(`  [${okFind ? "PASS" : "FAIL"}] findEnclosingStepEntry resolves a cursor inside the StepAction's own script`);
+  if (!okFind) failures++;
+
+  const blocks = findEmbeddedScriptBlocks(stepAction);
+  // No `name:` field of its own to label it with -- falls back to the StepAction's own metadata.name.
+  const okBlocks = blocks.length === 1 && blocks[0].languageId === "shellscript" && blocks[0].containerName === "mdk-stepaction";
+  console.log(`  [${okBlocks ? "PASS" : "FAIL"}] findEmbeddedScriptBlocks finds the shebang, containerName falls back to metadata.name: ${JSON.stringify(blocks.map((b) => ({ lang: b.languageId, name: b.containerName })))}`);
+  if (!okBlocks) failures++;
+}
+
 console.log("\nHighlighting: identity system + plain-scalar bindings decorated same as $(...) refs:");
 {
   // decorations.ts imports "vscode" for Range/Position/ThemeColor and to create decoration types

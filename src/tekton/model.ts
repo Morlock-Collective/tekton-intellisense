@@ -762,7 +762,18 @@ export function stepAndSidecarEntryMaps(parsed: ParsedTektonDoc): YAMLMap[] {
   const maps: YAMLMap[] = [];
 
   const owner = resolveTaskSpecOwner(parsed);
-  if (owner) maps.push(...stepAndSidecarEntriesOf(owner.ownerMap));
+  if (owner) {
+    // A standalone StepAction *is* one step -- its spec has `image`/`script`/`command`/`env`/...
+    // directly on it, unlike Task/ClusterTask/TaskRun-inline-taskSpec, which nest those same
+    // fields one level down inside a `steps:`/`sidecars:` list entry. So for a StepAction, the
+    // owning map (its own `spec`) is itself the one step-like entry, not a container to look
+    // inside of for a `steps:`/`sidecars:` list that doesn't exist.
+    if (parsed.symbols.kind === "StepAction") {
+      maps.push(owner.ownerMap);
+    } else {
+      maps.push(...stepAndSidecarEntriesOf(owner.ownerMap));
+    }
+  }
 
   for (const taskEntry of pipelineTaskEntryMaps(parsed)) {
     const taskSpec = mapOf(taskEntry.get("taskSpec", true));
