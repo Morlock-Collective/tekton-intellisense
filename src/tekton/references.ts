@@ -5,6 +5,7 @@ import {
   sameDocumentEdits,
   sameDocumentResultEdits,
   taskResultReferenceEdits,
+  taskParamReferenceEdits,
   taskRefIdentityEdits,
   pipelineRefIdentityEdits,
   templateRefIdentityEdits,
@@ -109,7 +110,6 @@ export class TektonReferenceProvider implements vscode.ReferenceProvider {
     const locations: vscode.Location[] = [];
 
     switch (target.kind) {
-      case "param":
       case "workspace":
       case "task-alias": {
         const declRange = declarationRange(parsed, target.kind, target.name);
@@ -119,6 +119,26 @@ export class TektonReferenceProvider implements vscode.ReferenceProvider {
           locations.push(toLocation(document.uri, parsed, range));
         }
         return locations;
+      }
+
+      case "param": {
+        addParamReferences(locations, document.uri, parsed, target.name, context.includeDeclaration);
+        // Only a Task/ClusterTask's own declared param can be bound from elsewhere (via taskRef) --
+        // a Pipeline's own param has no such cross-file binding in scope (see rename.ts).
+        if (parsed.symbols.kind === "Task" || parsed.symbols.kind === "ClusterTask") {
+          await addCrossFileParamReferences(locations, parsed, target.name);
+        }
+        return dedupe(locations);
+      }
+
+      case "task-param": {
+        // Read-only, so an ambiguous taskRefName isn't a reason to hold back -- every matching
+        // Task's references are searched and merged, unlike rename.ts's reject-on-ambiguity.
+        for (const record of this.workspaceIndex.lookupAllTaskRecords(target.taskRefName)) {
+          addParamReferences(locations, record.uri, record.parsed, target.paramName, context.includeDeclaration);
+          await addCrossFileParamReferences(locations, record.parsed, target.paramName);
+        }
+        return dedupe(locations);
       }
 
       case "result": {
@@ -145,7 +165,11 @@ export class TektonReferenceProvider implements vscode.ReferenceProvider {
           TASK_LIKE_KINDS,
           (n) => this.workspaceIndex.lookupAllTaskRecords(n),
           context.includeDeclaration,
-          [{ kinds: ["Pipeline", "TaskRun"], findEdits: taskRefIdentityEdits }]
+          // Task/ClusterTask included alongside Pipeline/TaskRun for the same reason as rename.ts's
+          // identical scan: a step's own `ref:` (pointing at a shared StepAction) can appear inside
+          // any of them, not just inline taskSpecs. StepAction itself is omitted -- it has no steps
+          // of its own to search.
+          [{ kinds: ["Pipeline", "TaskRun", "Task", "ClusterTask"], findEdits: taskRefIdentityEdits }]
         );
 
       case "pipeline-identity":
@@ -231,6 +255,45 @@ async function addCrossFileResultReferences(
       for (const range of noopRename(taskResultReferenceEdits(parsed, taskEntry.name, resultName, resultName))) {
         locations.push(toLocation(uri, parsed, range));
       }
+    }
+  }
+}
+
+function addParamReferences(
+  locations: vscode.Location[],
+  uri: vscode.Uri,
+  parsed: ParsedTektonDoc,
+  paramName: string,
+  includeDeclaration: boolean
+): void {
+  const edits = sameDocumentEdits(parsed, "param", paramName, paramName);
+  const declRange = parsed.symbols.params.find((p) => p.name === paramName)?.range;
+  for (const range of noopRename(edits)) {
+    if (!includeDeclaration && declRange && range[0] === declRange[0] && range[1] === declRange[1]) continue;
+    locations.push(toLocation(uri, parsed, range));
+  }
+}
+
+/** Read-only counterpart to rename.ts's addCrossFileParamEdits — merges every matching Pipeline task entry's and TaskRun's params: binding rather than resolving to one. */
+async function addCrossFileParamReferences(locations: vscode.Location[], taskParsed: ParsedTektonDoc, paramName: string): Promise<void> {
+  const taskName = taskParsed.symbols.metadataName;
+  if (!taskName) return;
+
+  const pipelines = await findWorkspaceDocs(["Pipeline"]);
+  for (const { uri, parsed } of pipelines) {
+    for (const taskEntry of parsed.symbols.tasks) {
+      if (taskEntry.taskRefName !== taskName) continue;
+      for (const range of noopRename(taskParamReferenceEdits(parsed, taskEntry.name, paramName, paramName))) {
+        locations.push(toLocation(uri, parsed, range));
+      }
+    }
+  }
+
+  const taskRuns = await findWorkspaceDocs(["TaskRun"]);
+  for (const { uri, parsed } of taskRuns) {
+    if (parsed.symbols.taskRefName !== taskName) continue;
+    for (const p of parsed.symbols.params) {
+      if (p.name === paramName && p.range) locations.push(toLocation(uri, parsed, p.range));
     }
   }
 }
