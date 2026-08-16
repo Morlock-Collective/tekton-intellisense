@@ -1789,8 +1789,8 @@ spec:
   if (!okUnresolved) failures++;
 }
 
-/** Mirrors codeActions.ts's addTaskParamBindingFix: adds `paramName` to a Pipeline task entry's or TaskRun's own params: binding. */
-function simulateAddTaskParamBinding(source, taskAlias, paramName) {
+/** Mirrors codeActions.ts's addTaskParamBindingFix/addAllTaskParamsFix (both go through insertParamBindingsEdit): adds every name in `paramNames` to a Pipeline task entry's or TaskRun's own params: binding, in one edit. */
+function simulateAddTaskParamBinding(source, taskAlias, paramNames) {
   const parsed = parseTektonDocument(source);
   const owner =
     parsed.symbols.kind === "TaskRun"
@@ -1805,7 +1805,7 @@ function simulateAddTaskParamBinding(source, taskAlias, paramName) {
         })();
   if (!owner) return { owner: undefined };
 
-  const itemLines = [`- name: ${paramName}`, `  value: ""`];
+  const itemLines = paramNames.flatMap((name) => [`- name: ${name}`, `  value: ""`]);
   const seq = findSeqIn(owner.ownerMap, "params");
   let offset, text;
   if (seq?.range) {
@@ -1879,7 +1879,7 @@ spec:
 
   // "Add the binding" fix: Pipeline task entry already has a params: list -- append to it.
   {
-    const { owner, result } = simulateAddTaskParamBinding(pipelineSource, "incomplete", "image-tag");
+    const { owner, result } = simulateAddTaskParamBinding(pipelineSource, "incomplete", ["image-tag"]);
     const after = owner && YAML.parse(result);
     const task = after?.spec.tasks.find((t) => t.name === "incomplete");
     const ok = owner !== undefined && task?.params?.length === 2 && task.params.some((p) => p.name === "image-tag" && p.value === "");
@@ -1892,7 +1892,7 @@ spec:
 
   // Same fix, but the TaskRun has no params: list at all yet -- must create it.
   {
-    const { owner, result } = simulateAddTaskParamBinding(taskRunSource, undefined, "image-tag");
+    const { owner, result } = simulateAddTaskParamBinding(taskRunSource, undefined, ["image-tag"]);
     const after = owner && YAML.parse(result);
     const ok = owner !== undefined && after?.spec.params?.length === 1 && after.spec.params[0].name === "image-tag";
     console.log(`  [${ok ? "PASS" : "FAIL"}] TaskRun with no params: yet: fresh params: [image-tag] created`);
@@ -1909,6 +1909,54 @@ spec:
     const param = after?.spec.params.find((p) => p.name === "image-tag");
     const ok = paramItem !== undefined && param?.default === "" && after.spec.params.find((p) => p.name === "region").default === "us-east-1";
     console.log(`  [${ok ? "PASS" : "FAIL"}] Task's own declaration: default: "" added to "image-tag", "region"'s own default untouched`);
+    if (!ok) {
+      console.log(result);
+      failures++;
+    }
+  }
+
+  // "Add all missing parameters" fix: both required params missing at once, fixed in a single edit.
+  {
+    const taskSourceThree = `apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: needs-three-params
+spec:
+  params:
+    - name: image-tag
+      type: string
+    - name: region
+      type: string
+    - name: registry
+      type: string
+      default: docker.io
+  steps:
+    - name: build
+      script: echo $(params.image-tag) $(params.region) $(params.registry)
+`;
+    const pipelineSourceThree = `apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: p
+spec:
+  tasks:
+    - name: incomplete
+      taskRef:
+        name: needs-three-params
+`;
+    const task = parseTektonDocument(taskSourceThree);
+    const requiredNames = task.symbols.params.filter((p) => p.default === undefined).map((p) => p.name);
+
+    const { owner, result } = simulateAddTaskParamBinding(pipelineSourceThree, "incomplete", requiredNames);
+    const after = owner && YAML.parse(result);
+    const taskEntry = after?.spec.tasks.find((t) => t.name === "incomplete");
+    const ok =
+      JSON.stringify(requiredNames) === JSON.stringify(["image-tag", "region"]) &&
+      owner !== undefined &&
+      taskEntry?.params?.length === 2 &&
+      taskEntry.params.every((p) => p.value === "") &&
+      taskEntry.params.map((p) => p.name).sort().join(",") === "image-tag,region";
+    console.log(`  [${ok ? "PASS" : "FAIL"}] both missing params ("image-tag", "region") added in one edit, "registry" (has a default) untouched (${JSON.stringify(requiredNames)})`);
     if (!ok) {
       console.log(result);
       failures++;

@@ -233,12 +233,16 @@ for a Pipeline task entry using an inline `taskSpec` instead of `taskRef`
 (binds to its own same-document declaration, a different case). Emits one
 diagnostic per missing param (not one aggregating the whole list), each
 carrying a `taskRefName`/`paramName` pair in its `code` so
-`codeActions.ts` can offer two quick fixes: add the binding right here
-(pre-filled with a placeholder value to fill in), or add a `default:` to
-the Task's own declaration instead — satisfying every binding at once
-rather than just this one, cross-file and even when that file isn't open
+`codeActions.ts` can offer quick fixes: add the binding right here
+(pre-filled with a placeholder value to fill in), add a `default:` to the
+Task's own declaration instead — satisfying every binding at once rather
+than just this one, cross-file and even when that file isn't open
 (positions built from the resolved record's own `lineCounter`, not the
-current document's).
+current document's) — or, once a task entry is missing more than one,
+add all of them in a single edit instead of one quick fix apiece
+(diagnostics sharing the same taskRef range are grouped for this, not
+just sharing a `taskRefName`, since two different entries in one document
+could reference the same Task).
 
 ## Notable bugs found and fixed along the way
 

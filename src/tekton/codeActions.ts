@@ -34,7 +34,14 @@ function columnIndent(text: string, offset: number): string {
   return " ".repeat(offset - lineStart);
 }
 
-/** Offers quick fixes encoded in a diagnostic's `code`: "suggest:X" applies a Did-you-mean rename; "add-runafter:X" adds X to the enclosing task's runAfter; "add-task-param:TASKREF:PARAM" offers both ways to satisfy a missing required param. */
+/** Every "add-task-param:TASKREF:PARAM" diagnostic sharing one task entry (same range, same taskRefName) — a Pipeline task entry or TaskRun missing more than one required param gets one such diagnostic per param, all anchored at the same taskRef range. */
+interface TaskParamGroup {
+  taskRefName: string;
+  diagnostics: vscode.Diagnostic[];
+  paramNames: string[];
+}
+
+/** Offers quick fixes encoded in a diagnostic's `code`: "suggest:X" applies a Did-you-mean rename; "add-runafter:X" adds X to the enclosing task's runAfter; "add-task-param:TASKREF:PARAM" offers ways to satisfy a missing required param, individually and (when more than one is missing on the same entry) all at once. */
 export class TektonRefCodeActionProvider implements vscode.CodeActionProvider {
   public static readonly metadata: vscode.CodeActionProviderMetadata = {
     providedCodeActionKinds: [vscode.CodeActionKind.QuickFix],
@@ -48,6 +55,7 @@ export class TektonRefCodeActionProvider implements vscode.CodeActionProvider {
     context: vscode.CodeActionContext
   ): vscode.CodeAction[] {
     const actions: vscode.CodeAction[] = [];
+    const taskParamGroups = new Map<string, TaskParamGroup>();
 
     for (const diagnostic of context.diagnostics) {
       if (diagnostic.source !== DIAGNOSTIC_SOURCE) continue;
@@ -66,7 +74,27 @@ export class TektonRefCodeActionProvider implements vscode.CodeActionProvider {
         if (bindingFix) actions.push(bindingFix);
         const defaultFix = this.addTaskParamDefaultFix(diagnostic, taskRefName, paramName);
         if (defaultFix) actions.push(defaultFix);
+
+        // Diagnostics for the same task entry share the exact same range (its taskRefNameRange),
+        // one per missing param -- that's the grouping key, not taskRefName alone, since two
+        // different entries in one document could reference the same Task.
+        const key = `${diagnostic.range.start.line}:${diagnostic.range.start.character}`;
+        let group = taskParamGroups.get(key);
+        if (!group) {
+          group = { taskRefName, diagnostics: [], paramNames: [] };
+          taskParamGroups.set(key, group);
+        }
+        group.diagnostics.push(diagnostic);
+        group.paramNames.push(paramName);
       }
+    }
+
+    // Only worth offering once a task entry is actually missing more than one param -- with just
+    // one, this would be a redundant duplicate of the per-diagnostic "add X" fix above.
+    for (const group of taskParamGroups.values()) {
+      if (group.paramNames.length < 2) continue;
+      const action = this.addAllTaskParamsFix(document, group.diagnostics, group.paramNames);
+      if (action) actions.push(action);
     }
 
     return actions;
@@ -128,10 +156,44 @@ export class TektonRefCodeActionProvider implements vscode.CodeActionProvider {
   }
 
   /**
-   * One of the two "missing required param" fixes: adds `paramName` to
-   * *this* binding (the Pipeline task entry's or TaskRun's own `params:`
-   * list), with a placeholder value the user still needs to fill in.
-   * Mirrors `commands/addParameter.ts`'s binding-shape insertion.
+   * Builds the edit shared by {@link addTaskParamBindingFix} and
+   * {@link addAllTaskParamsFix}: append one `- name: X\n  value: ""` entry
+   * per name in `paramNames` to `owner`'s `params:` list, creating the list
+   * if it doesn't exist yet. Mirrors `commands/addParameter.ts`'s
+   * binding-shape insertion.
+   */
+  private insertParamBindingsEdit(
+    document: vscode.TextDocument,
+    parsed: ParsedTektonDoc,
+    owner: SpecListOwner,
+    paramNames: string[]
+  ): vscode.WorkspaceEdit {
+    const edit = new vscode.WorkspaceEdit();
+    const itemLines = paramNames.flatMap((name) => [`- name: ${name}`, `  value: ${quoteYamlString("")}`]);
+    const seq = findSeqIn(owner.ownerMap, "params");
+
+    if (seq?.range) {
+      const lastItem = seq.items[seq.items.length - 1] as { range?: [number, number, number] } | undefined;
+      const anchorOffset = trimTrailingNewline(parsed.text, lastItem?.range ? lastItem.range[1] : seq.range[1]);
+      const itemIndent = lastItem ? indentAt(document, document.positionAt(seq.range[0])) : owner.keyIndent + "  ";
+      edit.insert(document.uri, document.positionAt(anchorOffset), blockAfterText(itemLines, itemIndent));
+      return edit;
+    }
+
+    // No `params:` key yet on the owner -- create it, appended after the owner's last existing key.
+    const anchorOffset = trimTrailingNewline(parsed.text, owner.ownerMapEnd);
+    edit.insert(
+      document.uri,
+      document.positionAt(anchorOffset),
+      blockAfterText(["params:", ...itemLines.map((l) => "  " + l)], owner.keyIndent)
+    );
+    return edit;
+  }
+
+  /**
+   * One of the "missing required param" fixes: adds `paramName` to *this*
+   * binding (the Pipeline task entry's or TaskRun's own `params:` list),
+   * with a placeholder value the user still needs to fill in.
    */
   private addTaskParamBindingFix(document: vscode.TextDocument, diagnostic: vscode.Diagnostic, paramName: string): vscode.CodeAction | undefined {
     const offset = document.offsetAt(diagnostic.range.start);
@@ -142,28 +204,30 @@ export class TektonRefCodeActionProvider implements vscode.CodeActionProvider {
     if (!owner) return undefined;
 
     const action = new vscode.CodeAction(`Add "${paramName}" to this task's params`, vscode.CodeActionKind.QuickFix);
-    action.edit = new vscode.WorkspaceEdit();
+    action.edit = this.insertParamBindingsEdit(document, parsed, owner, [paramName]);
     action.diagnostics = [diagnostic];
     action.isPreferred = true;
+    return action;
+  }
 
-    const itemLines = [`- name: ${paramName}`, `  value: ${quoteYamlString("")}`];
-    const seq = findSeqIn(owner.ownerMap, "params");
+  /**
+   * The bulk counterpart to {@link addTaskParamBindingFix}: adds every
+   * missing required param to this binding in one edit, rather than one
+   * quick fix per param — offered alongside the individual fixes whenever a
+   * task entry is missing more than one, since fixing them one at a time is
+   * the common case's slow path, not the interesting one.
+   */
+  private addAllTaskParamsFix(document: vscode.TextDocument, diagnostics: vscode.Diagnostic[], paramNames: string[]): vscode.CodeAction | undefined {
+    const offset = document.offsetAt(diagnostics[0].range.start);
+    const parsed = findResourceAt(parseTektonFile(document.getText()), offset);
+    if (!parsed) return undefined;
 
-    if (seq?.range) {
-      const lastItem = seq.items[seq.items.length - 1] as { range?: [number, number, number] } | undefined;
-      const anchorOffset = trimTrailingNewline(parsed.text, lastItem?.range ? lastItem.range[1] : seq.range[1]);
-      const itemIndent = lastItem ? indentAt(document, document.positionAt(seq.range[0])) : owner.keyIndent + "  ";
-      action.edit.insert(document.uri, document.positionAt(anchorOffset), blockAfterText(itemLines, itemIndent));
-      return action;
-    }
+    const owner = this.paramBindingOwner(document, parsed, offset);
+    if (!owner) return undefined;
 
-    // No `params:` key yet on the owner -- create it, appended after the owner's last existing key.
-    const anchorOffset = trimTrailingNewline(parsed.text, owner.ownerMapEnd);
-    action.edit.insert(
-      document.uri,
-      document.positionAt(anchorOffset),
-      blockAfterText(["params:", ...itemLines.map((l) => "  " + l)], owner.keyIndent)
-    );
+    const action = new vscode.CodeAction(`Add all missing parameters (${paramNames.join(", ")})`, vscode.CodeActionKind.QuickFix);
+    action.edit = this.insertParamBindingsEdit(document, parsed, owner, paramNames);
+    action.diagnostics = diagnostics;
     return action;
   }
 
