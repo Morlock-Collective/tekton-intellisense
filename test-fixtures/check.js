@@ -1704,6 +1704,90 @@ console.log("\nTriggerTemplate param-wiring check (simulated workspace index):")
   if (!okUnresolved) failures++;
 }
 
+console.log("\nTask param-wiring check: missing required params on a taskRef (simulated workspace index):");
+{
+  // Mirrors checkTaskParamWiring in diagnostics.ts, same vscode-free constraint as the
+  // TriggerTemplate param-wiring block above. Dedicated inline fixtures, since this needs a Task
+  // with a genuinely *required* (no-default) param -- all-kinds-multidoc.yaml's mdk-task declares
+  // "greeting" with a default, so it's never required and can't exercise the "missing" case.
+  const taskSource = `apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: needs-two-params
+spec:
+  params:
+    - name: image-tag
+      type: string
+    - name: region
+      type: string
+      default: us-east-1
+  steps:
+    - name: build
+      script: echo $(params.image-tag) $(params.region)
+`;
+  const pipelineSource = `apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: p
+spec:
+  tasks:
+    - name: incomplete
+      taskRef:
+        name: needs-two-params
+      params:
+        - name: region
+          value: eu-west-1
+    - name: complete
+      taskRef:
+        name: needs-two-params
+      params:
+        - name: image-tag
+          value: latest
+`;
+  const taskRunSource = `apiVersion: tekton.dev/v1
+kind: TaskRun
+metadata:
+  name: run
+spec:
+  taskRef:
+    name: needs-two-params
+`;
+  const task = parseTektonDocument(taskSource);
+  const pipeline = parseTektonDocument(pipelineSource);
+  const taskRun = parseTektonDocument(taskRunSource);
+  const tasksByName = new Map([[task.symbols.metadataName, task]]);
+
+  // Returns the list of missing required param names, or undefined if the taskRef doesn't resolve
+  // at all (not this check's job -- see checkTaskParamBindings above).
+  function missingParams(taskRefName, providedNames) {
+    const resolved = taskRefName && tasksByName.get(taskRefName);
+    if (!resolved) return undefined;
+    const provided = new Set(providedNames);
+    return resolved.symbols.params.filter((p) => p.default === undefined && !provided.has(p.name)).map((p) => p.name);
+  }
+
+  const byTaskAlias = Object.fromEntries(
+    pipeline.symbols.tasks.map((t) => [t.name, missingParams(t.taskRefName, t.paramBindings.map((pb) => pb.name))])
+  );
+  const okIncomplete = JSON.stringify(byTaskAlias.incomplete) === JSON.stringify(["image-tag"]);
+  console.log(`  [${okIncomplete ? "PASS" : "FAIL"}] "incomplete" task entry: flags missing required param "image-tag" (${JSON.stringify(byTaskAlias.incomplete)})`);
+  if (!okIncomplete) failures++;
+
+  const okComplete = JSON.stringify(byTaskAlias.complete) === JSON.stringify([]);
+  console.log(`  [${okComplete ? "PASS" : "FAIL"}] "complete" task entry: image-tag provided, region falls back to its default (${JSON.stringify(byTaskAlias.complete)})`);
+  if (!okComplete) failures++;
+
+  const taskRunMissing = missingParams(taskRun.symbols.taskRefName, taskRun.symbols.params.map((p) => p.name));
+  const okTaskRun = JSON.stringify(taskRunMissing) === JSON.stringify(["image-tag"]);
+  console.log(`  [${okTaskRun ? "PASS" : "FAIL"}] TaskRun with no params at all: flags missing required param "image-tag" (${JSON.stringify(taskRunMissing)})`);
+  if (!okTaskRun) failures++;
+
+  const unresolvedMissing = missingParams("no-such-task", []);
+  const okUnresolved = unresolvedMissing === undefined;
+  console.log(`  [${okUnresolved ? "PASS" : "FAIL"}] unresolved taskRef -> skipped (undefined), not a false "missing" report`);
+  if (!okUnresolved) failures++;
+}
+
 console.log("\nrename: cross-file TriggerTemplate identity (template.ref, EventListener + standalone Trigger):");
 {
   const elSource = fs.readFileSync(path.join(__dirname, "eventlistener-crossfile.yaml"), "utf8");

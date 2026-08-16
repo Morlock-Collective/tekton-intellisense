@@ -130,6 +130,57 @@ function checkTaskParamBindings(document: vscode.TextDocument, symbols: TektonSy
 }
 
 /**
+ * Flags a Pipeline task entry's (or TaskRun's own) `taskRef` when the
+ * referenced Task/ClusterTask declares a required param (no `default`)
+ * that this entry's `params:` binding doesn't provide by name. Unlike a
+ * typo'd binding name ({@link checkTaskParamBindings}), Tekton doesn't
+ * reject this until the PipelineRun/TaskRun actually runs, so it's easy to
+ * only discover by watching one fail. Mirrors
+ * {@link checkTriggerTemplateParamWiring}'s shape one level down.
+ *
+ * Skipped entirely (rather than guessed at) when the taskRef doesn't
+ * resolve at all — no check today flags an unresolved taskRef, so
+ * computing a "missing params" list against content we don't actually
+ * have would just be noise on top of it. Also a no-op for a Pipeline task
+ * entry using an inline `taskSpec` instead of `taskRef` — its params bind
+ * to its own same-document declaration, a different case with its own
+ * required/provided set that doesn't need cross-file resolution.
+ */
+function checkTaskParamWiring(document: vscode.TextDocument, symbols: TektonSymbols, workspaceIndex: TektonWorkspaceIndex): vscode.Diagnostic[] {
+  const diagnostics: vscode.Diagnostic[] = [];
+
+  const checkWiring = (taskRefName: string, taskRefNameRange: [number, number] | undefined, providedNames: string[]) => {
+    if (!taskRefNameRange) return;
+    const resolved = workspaceIndex.lookupTask(taskRefName);
+    if (!resolved) return;
+
+    const provided = new Set(providedNames);
+    const missing = resolved.params.filter((p) => p.default === undefined && !provided.has(p.name));
+    if (missing.length === 0) return;
+
+    const names = missing.map((p) => `"${p.name}"`).join(", ");
+    const diagnostic = new vscode.Diagnostic(
+      new vscode.Range(offsetToPosition(document, taskRefNameRange[0]), offsetToPosition(document, taskRefNameRange[1])),
+      `Task "${taskRefName}" requires param${missing.length > 1 ? "s" : ""} ${names} with no default, but this taskRef doesn't provide ${missing.length > 1 ? "them" : "it"}.`,
+      vscode.DiagnosticSeverity.Warning
+    );
+    diagnostic.source = DIAGNOSTIC_SOURCE;
+    diagnostics.push(diagnostic);
+  };
+
+  for (const task of symbols.tasks) {
+    if (!task.taskRefName) continue;
+    checkWiring(task.taskRefName, task.taskRefNameRange, task.paramBindings.map((pb) => pb.name));
+  }
+
+  if (symbols.kind === "TaskRun" && symbols.taskRefName) {
+    checkWiring(symbols.taskRefName, symbols.taskRefNameRange, symbols.params.map((p) => p.name));
+  }
+
+  return diagnostics;
+}
+
+/**
  * Surfaces {@link findMissingRunAfter} as Information-severity diagnostics
  * — deliberately not Warning/Error, since Tekton executes these correctly
  * either way; this is a readability suggestion, not a defect. Carries a
@@ -394,6 +445,7 @@ function computeResourceDiagnostics(
     ...checkDuplicateNames(document, parsed.symbols.bindingParams, "binding parameter"),
     ...checkTaskWorkspaceBindings(document, parsed.symbols),
     ...checkTaskParamBindings(document, parsed.symbols, workspaceIndex),
+    ...checkTaskParamWiring(document, parsed.symbols, workspaceIndex),
     ...checkMissingRunAfter(document, parsed),
     ...checkTriggerRefs(document, parsed.symbols, workspaceIndex),
     ...checkTriggerTemplateParamWiring(document, parsed.symbols, workspaceIndex),

@@ -221,6 +221,17 @@ existing same-name ambiguity handling, which now also covers two resources
 sharing a name *within* one file, the same way it already covered two
 files sharing a name.
 
+**Task param-wiring check** (`diagnostics.ts`) — flags a Pipeline task
+entry's (or TaskRun's own) `taskRef` when the referenced Task/ClusterTask
+declares a required param (no `default`) that the entry's `params:`
+binding doesn't provide by name. Same shape as the pre-existing
+TriggerTemplate param-wiring check, one level down — Tekton doesn't reject
+a missing required param until the PipelineRun/TaskRun actually runs, so
+it's easy to only discover by watching one fail. Skipped entirely when the
+taskRef doesn't resolve at all (no check flags that on its own today) or
+for a Pipeline task entry using an inline `taskSpec` instead of `taskRef`
+(binds to its own same-document declaration, a different case).
+
 ## Notable bugs found and fixed along the way
 
 - Multi-line inserts only indented their first line correctly; the trailing
