@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { ParsedTektonDoc, parseTektonDocument, TASK_LIKE_KINDS, TRIGGER_BINDING_LIKE_KINDS, TektonKind } from "./model";
+import { ParsedTektonDoc, parseTektonFile, findResourceAt, TASK_LIKE_KINDS, TRIGGER_BINDING_LIKE_KINDS, TektonKind } from "./model";
 import {
   resolveRenameTarget,
   sameDocumentEdits,
@@ -101,10 +101,11 @@ export class TektonReferenceProvider implements vscode.ReferenceProvider {
     position: vscode.Position,
     context: vscode.ReferenceContext
   ): Promise<vscode.Location[] | undefined> {
-    const parsed = parseTektonDocument(document.getText());
+    const offset = document.offsetAt(position);
+    const parsed = findResourceAt(parseTektonFile(document.getText()), offset);
     if (!parsed) return undefined;
 
-    const target = resolveRenameTarget(parsed, document.offsetAt(position));
+    const target = resolveRenameTarget(parsed, offset);
     if (!target) return undefined;
 
     const locations: vscode.Location[] = [];
@@ -310,8 +311,11 @@ function addIdentityDeclarations(
   if (currentParsed.symbols.metadataName === name && ownKinds.has(currentParsed.symbols.kind) && currentParsed.symbols.metadataNameRange) {
     locations.push(toLocation(document.uri, currentParsed, currentParsed.symbols.metadataNameRange));
   }
+  // Deliberately not skipped just because a record's uri matches `document.uri`: a multi-document
+  // file can hold more than one resource, so another record sharing this uri may well be a
+  // *different* sibling resource, not the one already added above. The caller dedupes the final
+  // list by (uri, range), which is what actually collapses a genuine repeat.
   for (const record of records) {
-    if (record.uri.toString() === document.uri.toString()) continue; // already added above, from the live buffer
     if (record.parsed.symbols.metadataNameRange) {
       locations.push(toLocation(record.uri, record.parsed, record.parsed.symbols.metadataNameRange));
     }

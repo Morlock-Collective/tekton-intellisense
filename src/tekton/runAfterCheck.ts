@@ -1,6 +1,6 @@
 import { isScalar, isSeq } from "yaml";
 import { ParsedTektonDoc, findEnclosingTaskEntry } from "./model";
-import { findParamRefs } from "./paramRefs";
+import { paramRefsIn } from "./paramRefs";
 
 export interface MissingRunAfter {
   /** the task whose runAfter is missing an entry */
@@ -24,7 +24,7 @@ export function findMissingRunAfter(parsed: ParsedTektonDoc): MissingRunAfter[] 
   if (parsed.symbols.kind !== "Pipeline") return [];
 
   const results: MissingRunAfter[] = [];
-  const allRefs = findParamRefs(parsed.text);
+  const allRefs = paramRefsIn(parsed);
   const taskNames = new Set(parsed.symbols.tasks.map((t) => t.name));
 
   for (const taskEntry of parsed.symbols.tasks) {

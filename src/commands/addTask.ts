@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { findSeqIn, parseTektonDocument, resolvePipelineSpecOwner, trimTrailingNewline } from "../tekton/model";
+import { findSeqIn, parseTektonFile, findResourceAt, resolvePipelineSpecOwner, trimTrailingNewline } from "../tekton/model";
 import { indentAt, insertBlockAfter } from "./editUtils";
 
 /**
@@ -15,7 +15,7 @@ export async function addTaskCommand(): Promise<void> {
   if (!editor) return;
 
   const document = editor.document;
-  const parsed = parseTektonDocument(document.getText());
+  const parsed = findResourceAt(parseTektonFile(document.getText()), document.offsetAt(editor.selection.active));
   if (!parsed) {
     vscode.window.showWarningMessage("Tekton Intellisense: this doesn't look like a Tekton resource.");
     return;

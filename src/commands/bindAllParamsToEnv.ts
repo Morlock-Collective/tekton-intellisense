@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { parseTektonDocument } from "../tekton/model";
+import { parseTektonFile, findResourceAt } from "../tekton/model";
 import { alreadyBoundParamNames, existingEnvNames, insertEnvBindings, pickStepOrSidecarEntry, toEnvVarName, uniqueEnvName } from "./editUtils";
 
 /**
@@ -17,7 +17,7 @@ export async function bindAllParamsToEnvCommand(): Promise<void> {
   if (!editor) return;
 
   const document = editor.document;
-  const parsed = parseTektonDocument(document.getText());
+  const parsed = findResourceAt(parseTektonFile(document.getText()), document.offsetAt(editor.selection.active));
   if (!parsed) {
     vscode.window.showWarningMessage("Tekton Intellisense: this doesn't look like a Tekton resource.");
     return;

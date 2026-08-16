@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
-import { ParsedTektonDoc, parseTektonDocument } from "./model";
-import { findParamRefs } from "./paramRefs";
+import { ParsedTektonDoc, parseTektonFile, findResourceAt } from "./model";
+import { paramRefsIn } from "./paramRefs";
 import { resolveRenameTarget } from "./renameTarget";
 import { TektonWorkspaceIndex } from "./workspaceIndex";
 import { toVscodeRange } from "./rangeUtils";
@@ -21,16 +21,16 @@ export class TektonDefinitionProvider implements vscode.DefinitionProvider {
   constructor(private readonly workspaceIndex: TektonWorkspaceIndex) {}
 
   provideDefinition(document: vscode.TextDocument, position: vscode.Position): vscode.Definition | undefined {
-    const parsed = parseTektonDocument(document.getText());
+    const offset = document.offsetAt(position);
+    const parsed = findResourceAt(parseTektonFile(document.getText()), offset);
     if (!parsed) return undefined;
 
-    const offset = document.offsetAt(position);
     const { symbols } = parsed;
 
     const identity = this.resolveIdentityDefinition(parsed, offset);
     if (identity) return identity;
 
-    for (const ref of findParamRefs(parsed.text)) {
+    for (const ref of paramRefsIn(parsed)) {
       if (offset < ref.start || offset > ref.end) continue;
 
       if ((ref.kind === "param" || ref.kind === "tt-param") && ref.name) {

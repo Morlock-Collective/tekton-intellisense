@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { parseTektonDocument, ParsedTektonDoc, TASK_LIKE_KINDS, TRIGGER_BINDING_LIKE_KINDS, TektonKind, TektonSymbols } from "./model";
+import { parseTektonFile, ParsedTektonDoc, TASK_LIKE_KINDS, TRIGGER_BINDING_LIKE_KINDS, TektonKind, TektonSymbols } from "./model";
 
 const YAML_GLOB = "**/*.{yaml,yml}";
 const EXCLUDE_GLOB = "**/{node_modules,.git}/**";
@@ -10,10 +10,15 @@ export interface IndexedResource {
 }
 
 /**
- * name -> (uri -> record). Two levels deep, not flat by name, so that two
- * files declaring the same `metadata.name` (a vendored Task present in
- * more than one chart, say) don't clobber each other: re-indexing or
- * removing one file only ever touches its own entry.
+ * name -> (resourceKey -> record). Two levels deep, not flat by name, so
+ * that two resources declaring the same `metadata.name` (a vendored Task
+ * present in more than one chart, say — or two sibling documents in one
+ * multi-document file) don't clobber each other: re-indexing or removing
+ * one resource only ever touches its own entry. `resourceKey` identifies
+ * one `---`-separated document within a file (see {@link resourceKey}), not
+ * just the file itself — a single file can contribute more than one entry
+ * per group (two Tasks in one file) or across groups (a Task and a Pipeline
+ * in one file).
  */
 type NameIndex = Map<string, Map<string, IndexedResource>>;
 
@@ -43,11 +48,16 @@ function groupFor(kind: TektonKind): IndexGroup | undefined {
 
 interface GroupState {
   byName: NameIndex;
-  nameByUri: Map<string, string>;
+  nameByResourceKey: Map<string, string>;
 }
 
 function newGroupState(): GroupState {
-  return { byName: new Map(), nameByUri: new Map() };
+  return { byName: new Map(), nameByResourceKey: new Map() };
+}
+
+/** Identifies one `---`-separated document within a file — the unit this index actually tracks, since a single file can hold several resources. */
+function resourceKey(uriKey: string, docIndex: number): string {
+  return `${uriKey}#${docIndex}`;
 }
 
 /**
@@ -73,6 +83,8 @@ export class TektonWorkspaceIndex implements vscode.Disposable {
   };
   private readonly disposables: vscode.Disposable[] = [];
   private reindexTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Every resourceKey a given file (by uriKey) currently owns, across all groups — so a re-index or removal can wipe exactly its own previous entries, however many documents it holds, without touching any other file's. */
+  private resourceKeysByUri = new Map<string, string[]>();
 
   constructor() {
     const watcher = vscode.workspace.createFileSystemWatcher(YAML_GLOB);
@@ -130,45 +142,55 @@ export class TektonWorkspaceIndex implements vscode.Disposable {
   }
 
   private index(uri: vscode.Uri, text: string): void {
-    const key = uri.toString();
-    for (const group of Object.values(this.groups)) {
-      this.removeFromIndex(group, key);
-    }
+    const uriKey = uri.toString();
+    this.removeUri(uriKey);
 
-    const parsed = parseTektonDocument(text);
-    if (!parsed?.symbols.metadataName) return;
-
-    const group = groupFor(parsed.symbols.kind);
-    if (group) this.addToIndex(this.groups[group], key, parsed.symbols.metadataName, uri, parsed);
+    const newKeys: string[] = [];
+    parseTektonFile(text).forEach((parsed, docIndex) => {
+      if (!parsed.symbols.metadataName) return;
+      const group = groupFor(parsed.symbols.kind);
+      if (!group) return;
+      const rk = resourceKey(uriKey, docIndex);
+      this.addToIndex(this.groups[group], rk, parsed.symbols.metadataName, uri, parsed);
+      newKeys.push(rk);
+    });
+    if (newKeys.length > 0) this.resourceKeysByUri.set(uriKey, newKeys);
   }
 
-  private addToIndex(group: GroupState, uriKey: string, name: string, uri: vscode.Uri, parsed: ParsedTektonDoc): void {
-    let byUri = group.byName.get(name);
-    if (!byUri) {
-      byUri = new Map();
-      group.byName.set(name, byUri);
+  private addToIndex(group: GroupState, rk: string, name: string, uri: vscode.Uri, parsed: ParsedTektonDoc): void {
+    let byKey = group.byName.get(name);
+    if (!byKey) {
+      byKey = new Map();
+      group.byName.set(name, byKey);
     }
-    byUri.set(uriKey, { uri, parsed });
-    group.nameByUri.set(uriKey, name);
+    byKey.set(rk, { uri, parsed });
+    group.nameByResourceKey.set(rk, name);
   }
 
-  /** Removes whatever entry `uriKey` currently owns from `group`, without touching any other file's entry under the same name. */
-  private removeFromIndex(group: GroupState, uriKey: string): void {
-    const prevName = group.nameByUri.get(uriKey);
+  /** Removes whatever entry `rk` currently owns from `group`, without touching any other resource's entry under the same name. */
+  private removeFromIndex(group: GroupState, rk: string): void {
+    const prevName = group.nameByResourceKey.get(rk);
     if (!prevName) return;
-    const byUri = group.byName.get(prevName);
-    if (byUri) {
-      byUri.delete(uriKey);
-      if (byUri.size === 0) group.byName.delete(prevName);
+    const byKey = group.byName.get(prevName);
+    if (byKey) {
+      byKey.delete(rk);
+      if (byKey.size === 0) group.byName.delete(prevName);
     }
-    group.nameByUri.delete(uriKey);
+    group.nameByResourceKey.delete(rk);
+  }
+
+  /** Removes every resourceKey `uriKey` currently owns, across every group and however many documents it held. */
+  private removeUri(uriKey: string): void {
+    const prevKeys = this.resourceKeysByUri.get(uriKey);
+    if (!prevKeys) return;
+    for (const group of Object.values(this.groups)) {
+      for (const rk of prevKeys) this.removeFromIndex(group, rk);
+    }
+    this.resourceKeysByUri.delete(uriKey);
   }
 
   private remove(uri: vscode.Uri): void {
-    const key = uri.toString();
-    for (const group of Object.values(this.groups)) {
-      this.removeFromIndex(group, key);
-    }
+    this.removeUri(uri.toString());
   }
 
   private lookupRecord(group: IndexGroup, name: string): IndexedResource | undefined {

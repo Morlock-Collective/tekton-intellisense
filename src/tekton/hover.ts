@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
-import { ParamSymbol, WorkspaceSymbol, ResultSymbol, TaskSymbol, ParsedTektonDoc, parseTektonDocument } from "./model";
-import { findParamRefs } from "./paramRefs";
+import { ParamSymbol, WorkspaceSymbol, ResultSymbol, TaskSymbol, ParsedTektonDoc, parseTektonFile, findResourceAt } from "./model";
+import { paramRefsIn } from "./paramRefs";
 import { resolveRenameTarget } from "./renameTarget";
 import { CONTEXT_TREE, CONTEXT_GROUP_DESCRIPTIONS } from "./contextVariables";
 import { TektonWorkspaceIndex, IndexedResource } from "./workspaceIndex";
@@ -88,10 +88,11 @@ export class TektonHoverProvider implements vscode.HoverProvider {
   constructor(private readonly workspaceIndex: TektonWorkspaceIndex) {}
 
   provideHover(document: vscode.TextDocument, position: vscode.Position): vscode.Hover | undefined {
-    const parsed = parseTektonDocument(document.getText());
+    const docs = parseTektonFile(document.getText());
+    const offset = document.offsetAt(position);
+    const parsed = findResourceAt(docs, offset);
     if (!parsed) return undefined;
 
-    const offset = document.offsetAt(position);
     const { symbols } = parsed;
 
     // Identity sites: hovering a resource's own metadata.name, or a taskRef/
@@ -114,7 +115,7 @@ export class TektonHoverProvider implements vscode.HoverProvider {
     }
 
     // Reference sites: hovering inside a $(...) expression.
-    for (const ref of findParamRefs(parsed.text)) {
+    for (const ref of paramRefsIn(parsed)) {
       if (offset < ref.start || offset > ref.end) continue;
 
       if ((ref.kind === "param" || ref.kind === "tt-param") && ref.name && ref.nameStart !== undefined && ref.nameEnd !== undefined) {

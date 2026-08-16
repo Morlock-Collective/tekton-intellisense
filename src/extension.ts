@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import { computeDiagnostics, DIAGNOSTIC_SOURCE } from "./tekton/diagnostics";
 import { TektonRefCodeActionProvider } from "./tekton/codeActions";
-import { parseTektonDocument } from "./tekton/model";
+import { parseTektonFile, findResourceAt } from "./tekton/model";
 import { TektonStatusBar } from "./tekton/statusBar";
 import { updateDecorations, clearDecorations, disposeDecorations } from "./tekton/decorations";
 import { TektonWorkspaceIndex } from "./tekton/workspaceIndex";
@@ -49,10 +49,15 @@ function refreshActiveEditorState(editor: vscode.TextEditor | undefined): void {
     if (editor) clearDecorations(editor);
     return;
   }
-  const parsed = parseTektonDocument(editor.document.getText());
-  statusBar.update(parsed?.symbols.kind, parsed?.isHelmTemplated ?? false);
-  void vscode.commands.executeCommand("setContext", "tektonIntellisense.active", !!parsed);
-  updateDecorations(editor, parsed);
+  const docs = parseTektonFile(editor.document.getText());
+  // Status bar reflects whichever resource the cursor is currently in, for a multi-document file --
+  // falling back to the first resource when the cursor isn't inside any of them (e.g. it hasn't moved
+  // since the file was opened).
+  const cursorOffset = editor.document.offsetAt(editor.selection.active);
+  const active = findResourceAt(docs, cursorOffset);
+  statusBar.update(active?.symbols.kind, active?.isHelmTemplated ?? false);
+  void vscode.commands.executeCommand("setContext", "tektonIntellisense.active", docs.length > 0);
+  updateDecorations(editor, docs);
 }
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -93,6 +98,13 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       refreshActiveEditorState(editor);
       if (editor) refreshDiagnostics(editor.document, workspaceIndex);
+    }),
+    // The status bar shows whichever resource the cursor is currently inside, for a
+    // multi-document file -- so it needs to track cursor movement between resources, not just
+    // document/editor changes (decorations don't depend on the cursor, but recomputing them here
+    // too is cheap and keeps this one listener simple).
+    vscode.window.onDidChangeTextEditorSelection((e) => {
+      if (e.textEditor === vscode.window.activeTextEditor) refreshActiveEditorState(e.textEditor);
     }),
     vscode.workspace.onDidCloseTextDocument((doc) => diagnosticCollection.delete(doc.uri)),
     vscode.workspace.onDidChangeConfiguration((e) => {

@@ -1,4 +1,4 @@
-import { Document, LineCounter, parseDocument, visit, YAMLMap, YAMLSeq, isMap, isSeq, isScalar } from "yaml";
+import { Document, LineCounter, parseAllDocuments, visit, YAMLMap, YAMLSeq, isMap, isSeq, isScalar } from "yaml";
 import { maskHelmTemplates } from "./helmMask";
 
 export type TektonKind =
@@ -141,7 +141,10 @@ export const TRIGGER_BINDING_LIKE_KINDS: ReadonlySet<TektonKind> = new Set(["Tri
 export interface ParsedTektonDoc {
   doc: Document.Parsed;
   lineCounter: LineCounter;
+  /** full source text of the *file*, not just this resource — a file can hold several `---`-separated Tekton resources, each getting its own {@link ParsedTektonDoc} sharing this same text/lineCounter. See {@link range}. */
   text: string;
+  /** this resource's own `[start, end)` offset span within {@link text} — the part of a multi-document file that belongs to it, as opposed to a sibling document before/after a `---` marker. Whole-file scans (e.g. `$(...)` ref search) must intersect this to avoid attributing another resource's references to this one. */
+  range: [number, number];
   symbols: TektonSymbols;
   isHelmTemplated: boolean;
 }
@@ -366,22 +369,12 @@ function triggerEntries(seq: YAMLSeq | undefined): TriggerEntrySymbol[] {
 }
 
 /**
- * Parses a Tekton YAML document (optionally Helm-templated) and extracts the
- * symbol table used for reference validation. Returns undefined if the text
- * doesn't look like a Tekton resource at all, so callers can skip
- * unnecessary work on unrelated YAML files.
+ * Extracts one document's Tekton symbol table, or undefined if its root
+ * doesn't look like a recognized Tekton/Triggers resource at all (including
+ * a blank document, e.g. a stray trailing `---`) — callers use that to skip
+ * non-Tekton documents within an otherwise-relevant multi-document file.
  */
-export function parseTektonDocument(source: string): ParsedTektonDoc | undefined {
-  const { text, masked: isHelmTemplated } = maskHelmTemplates(source);
-
-  const lineCounter = new LineCounter();
-  let doc: Document.Parsed;
-  try {
-    doc = parseDocument(text, { lineCounter, keepSourceTokens: false });
-  } catch {
-    return undefined;
-  }
-
+function extractSymbols(doc: Document.Parsed): TektonSymbols | undefined {
   const root = mapOf(doc.contents);
   if (!root) return undefined;
 
@@ -428,31 +421,94 @@ export function parseTektonDocument(source: string): ParsedTektonDoc | undefined
   const triggers = kind === "EventListener" ? triggerEntries(seqOf(spec?.get("triggers", true))) : [];
 
   return {
-    doc,
-    lineCounter,
-    text,
-    isHelmTemplated,
-    symbols: {
-      kind,
-      apiVersion: apiVersionValue,
-      metadataName,
-      metadataNameRange,
-      pipelineRefName: pipelineRef?.name,
-      pipelineRefNameRange: pipelineRef?.range,
-      taskRefName: ownTaskRef?.name,
-      taskRefNameRange: ownTaskRef?.range,
-      templateRefName: ownTemplateRef?.name,
-      templateRefNameRange: ownTemplateRef?.range,
-      bindingRefs: ownBindingRefs,
-      inlineParamNames: ownInlineParamNames,
-      params,
-      workspaces,
-      results,
-      tasks,
-      bindingParams,
-      triggers,
-    },
+    kind,
+    apiVersion: apiVersionValue,
+    metadataName,
+    metadataNameRange,
+    pipelineRefName: pipelineRef?.name,
+    pipelineRefNameRange: pipelineRef?.range,
+    taskRefName: ownTaskRef?.name,
+    taskRefNameRange: ownTaskRef?.range,
+    templateRefName: ownTemplateRef?.name,
+    templateRefNameRange: ownTemplateRef?.range,
+    bindingRefs: ownBindingRefs,
+    inlineParamNames: ownInlineParamNames,
+    params,
+    workspaces,
+    results,
+    tasks,
+    bindingParams,
+    triggers,
   };
+}
+
+/**
+ * Parses a Tekton YAML file — possibly holding several `---`-separated
+ * documents, each its own Kubernetes resource (a common Helm-chart-output
+ * and kustomize-build layout) — into one {@link ParsedTektonDoc} per
+ * document that looks like a recognized Tekton/Triggers resource. A
+ * document that doesn't (a blank one from a trailing `---`, or unrelated
+ * YAML mixed into the same file) is silently skipped, same as
+ * {@link parseTektonDocument} returning undefined for a whole non-Tekton
+ * file. Every returned entry shares one `text`/`lineCounter` spanning the
+ * whole file — offsets are never renumbered per-document — but carries its
+ * own {@link ParsedTektonDoc.range} so callers can tell which resource a
+ * given offset belongs to (see {@link findResourceAt}).
+ */
+export function parseTektonFile(source: string): ParsedTektonDoc[] {
+  const { text, masked: isHelmTemplated } = maskHelmTemplates(source);
+
+  const lineCounter = new LineCounter();
+  let docs: Document.Parsed[];
+  try {
+    docs = parseAllDocuments(text, { lineCounter, keepSourceTokens: false });
+  } catch {
+    return [];
+  }
+
+  const out: ParsedTektonDoc[] = [];
+  for (const doc of docs) {
+    const symbols = extractSymbols(doc);
+    if (!symbols) continue;
+    const range: [number, number] = doc.range ? [doc.range[0], doc.range[2]] : [0, text.length];
+    out.push({ doc, lineCounter, text, range, isHelmTemplated, symbols });
+  }
+  return out;
+}
+
+/**
+ * Parses a Tekton YAML document (optionally Helm-templated) and extracts the
+ * symbol table used for reference validation. Returns undefined if the text
+ * doesn't look like a Tekton resource at all, so callers can skip
+ * unnecessary work on unrelated YAML files. Only ever considers the *first*
+ * document in the file — callers that need to handle a multi-document file
+ * fully should use {@link parseTektonFile} instead; this remains for the
+ * (still common) single-resource-per-file case and for call sites that
+ * genuinely only care about "is this file Tekton at all".
+ */
+export function parseTektonDocument(source: string): ParsedTektonDoc | undefined {
+  return parseTektonFile(source)[0];
+}
+
+/**
+ * Which of `docs` (as returned by {@link parseTektonFile}) `offset` falls
+ * within — i.e. which resource a cursor position or edit anchor belongs to
+ * in a possibly multi-document file. Falls back to the closest document
+ * starting at-or-before `offset` (covering a position that lands in the
+ * inter-document whitespace/`---` marker itself), then simply the first
+ * document, so this always resolves to something as long as `docs` is
+ * non-empty — every position-based feature needs exactly one document to
+ * operate against, never "none, because the cursor sits between two".
+ */
+export function findResourceAt(docs: ParsedTektonDoc[], offset: number): ParsedTektonDoc | undefined {
+  for (const d of docs) {
+    if (offset >= d.range[0] && offset <= d.range[1]) return d;
+  }
+  let best: ParsedTektonDoc | undefined;
+  for (const d of docs) {
+    if (d.range[0] <= offset && (!best || d.range[0] > best.range[0])) best = d;
+  }
+  return best ?? docs[0];
 }
 
 /**

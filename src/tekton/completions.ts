@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { parseTektonDocument, ParsedTektonDoc, TASK_LIKE_KINDS, TektonSymbols, TRIGGER_BINDING_LIKE_KINDS } from "./model";
+import { parseTektonFile, findResourceAt, ParsedTektonDoc, TASK_LIKE_KINDS, TektonSymbols, TRIGGER_BINDING_LIKE_KINDS } from "./model";
 import { TektonWorkspaceIndex } from "./workspaceIndex";
 import { CONTEXT_TREE } from "./contextVariables";
 
@@ -167,7 +167,7 @@ export class TektonRefCompletionProvider implements vscode.CompletionItemProvide
     document: vscode.TextDocument,
     position: vscode.Position
   ): vscode.CompletionItem[] | undefined {
-    const parsed = parseTektonDocument(document.getText());
+    const parsed = findResourceAt(parseTektonFile(document.getText()), document.offsetAt(position));
     if (!parsed) return undefined;
 
     const ctx = getRefContext(document, position);

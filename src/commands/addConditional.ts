@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { findEnclosingTaskEntry, parseTektonDocument, pipelineTaskEntryMaps, trimTrailingNewline } from "../tekton/model";
+import { findEnclosingTaskEntry, parseTektonFile, findResourceAt, pipelineTaskEntryMaps, trimTrailingNewline } from "../tekton/model";
 import { indentAt, insertBlockAfter } from "./editUtils";
 import { quoteYamlString } from "./snippetText";
 import { isScalar, isSeq, YAMLMap } from "yaml";
@@ -22,13 +22,13 @@ export async function addConditionalCommand(): Promise<void> {
   if (!editor) return;
 
   const document = editor.document;
-  const parsed = parseTektonDocument(document.getText());
+  const offset = document.offsetAt(editor.selection.active);
+  const parsed = findResourceAt(parseTektonFile(document.getText()), offset);
   if (!parsed) {
     vscode.window.showWarningMessage("Tekton Intellisense: this doesn't look like a Tekton resource.");
     return;
   }
 
-  const offset = document.offsetAt(editor.selection.active);
   let taskEntry = findEnclosingTaskEntry(parsed, offset);
 
   if (!taskEntry) {

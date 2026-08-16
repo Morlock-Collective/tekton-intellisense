@@ -1,5 +1,5 @@
 import { ParsedTektonDoc, stepActionRefs, TaskSymbol, TASK_LIKE_KINDS, TRIGGER_BINDING_LIKE_KINDS } from "./model";
-import { findParamRefs } from "./paramRefs";
+import { paramRefsIn } from "./paramRefs";
 
 /**
  * What's being renamed, and the range of the specific token under the
@@ -38,7 +38,7 @@ function inRange(range: [number, number] | undefined, offset: number): boolean {
  * "disable rename here" (VS Code's `prepareRename` contract).
  */
 export function resolveRenameTarget(parsed: ParsedTektonDoc, offset: number): RenameTarget | undefined {
-  const { symbols, text } = parsed;
+  const { symbols } = parsed;
 
   // A TaskRun using `taskRef` (not an inline taskSpec) has its own spec.params as a *binding* to
   // the referenced Task's declared params, not a declaration of its own -- same relationship as a
@@ -119,7 +119,7 @@ export function resolveRenameTarget(parsed: ParsedTektonDoc, offset: number): Re
     if (inRange(ref.range, offset)) return { kind: "binding-identity", name: ref.name, range: ref.range! };
   }
 
-  for (const ref of findParamRefs(text)) {
+  for (const ref of paramRefsIn(parsed)) {
     if (offset < ref.start || offset > ref.end) continue;
 
     if (ref.kind === "param" && ref.name && ref.nameStart !== undefined && ref.nameEnd !== undefined) {
@@ -179,7 +179,7 @@ export function sameDocumentEdits(
   name: string,
   newName: string
 ): TextEdit[] {
-  const { symbols, text } = parsed;
+  const { symbols } = parsed;
   const edits: TextEdit[] = [];
 
   const declList = kind === "param" ? symbols.params : kind === "workspace" ? symbols.workspaces : symbols.tasks;
@@ -187,7 +187,7 @@ export function sameDocumentEdits(
   if (decl?.range) edits.push({ range: decl.range, newText: newName });
 
   const refKind = kind === "task-alias" ? "task-result" : kind;
-  for (const ref of findParamRefs(text)) {
+  for (const ref of paramRefsIn(parsed)) {
     if (ref.kind !== refKind || ref.name !== name) continue;
     if (ref.nameStart === undefined || ref.nameEnd === undefined) continue;
     edits.push({ range: [ref.nameStart, ref.nameEnd], newText: newName });
@@ -216,13 +216,13 @@ export function sameDocumentEdits(
 
 /** Every same-document occurrence of a Task's own result — its declaration plus any $(results.NAME.path) self-references. */
 export function sameDocumentResultEdits(parsed: ParsedTektonDoc, resultName: string, newName: string): TextEdit[] {
-  const { symbols, text } = parsed;
+  const { symbols } = parsed;
   const edits: TextEdit[] = [];
 
   const decl = symbols.results.find((r) => r.name === resultName);
   if (decl?.range) edits.push({ range: decl.range, newText: newName });
 
-  for (const ref of findParamRefs(text)) {
+  for (const ref of paramRefsIn(parsed)) {
     if (ref.kind !== "result" || ref.name !== resultName) continue;
     if (ref.nameStart === undefined || ref.nameEnd === undefined) continue;
     edits.push({ range: [ref.nameStart, ref.nameEnd], newText: newName });
@@ -234,7 +234,7 @@ export function sameDocumentResultEdits(parsed: ParsedTektonDoc, resultName: str
 /** Every `$(tasks.<taskAlias>.results.<resultName>)` reference in `parsed` pointing at one specific local task alias. */
 export function taskResultReferenceEdits(parsed: ParsedTektonDoc, taskAlias: string, resultName: string, newName: string): TextEdit[] {
   const edits: TextEdit[] = [];
-  for (const ref of findParamRefs(parsed.text)) {
+  for (const ref of paramRefsIn(parsed)) {
     if (ref.kind !== "task-result" || ref.name !== taskAlias || ref.resultName !== resultName) continue;
     if (ref.resultNameStart === undefined || ref.resultNameEnd === undefined) continue;
     edits.push({ range: [ref.resultNameStart, ref.resultNameEnd], newText: newName });

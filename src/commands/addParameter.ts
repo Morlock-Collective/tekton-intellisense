@@ -1,25 +1,27 @@
 import * as vscode from "vscode";
-import { findSeqIn, parseTektonDocument, resolveParamsTarget, trimTrailingNewline } from "../tekton/model";
+import { findSeqIn, parseTektonFile, findResourceAt, resolveParamsTarget, trimTrailingNewline } from "../tekton/model";
 import { insertBlockAfter, indentAt } from "./editUtils";
 import { quoteYamlString } from "./snippetText";
 
 const PARAM_TYPES = ["string", "array", "object"];
 
 /**
- * Adds a new parameter, appended last in the correct list — cursor position
- * is never consulted. Where that list lives, and what shape an entry takes,
- * depends on the resource: Pipelines/Tasks/ClusterTasks/StepActions declare
- * params (name/type/description/default) directly under spec; a
- * PipelineRun/TaskRun either *provides* param values (name/value) when
- * using a `..Ref`, or declares params like a Pipeline/Task when it embeds
- * one inline via `pipelineSpec`/`taskSpec`.
+ * Adds a new parameter, appended last in the correct list. Cursor position
+ * only decides *which resource* gets it, for a multi-document file (falling
+ * back to the closest preceding one) — never where within that resource's
+ * own list the new entry goes. Where that list lives, and what shape an
+ * entry takes, depends on the resource: Pipelines/Tasks/ClusterTasks/
+ * StepActions declare params (name/type/description/default) directly
+ * under spec; a PipelineRun/TaskRun either *provides* param values
+ * (name/value) when using a `..Ref`, or declares params like a
+ * Pipeline/Task when it embeds one inline via `pipelineSpec`/`taskSpec`.
  */
 export async function addParameterCommand(): Promise<void> {
   const editor = vscode.window.activeTextEditor;
   if (!editor) return;
 
   const document = editor.document;
-  const parsed = parseTektonDocument(document.getText());
+  const parsed = findResourceAt(parseTektonFile(document.getText()), document.offsetAt(editor.selection.active));
   if (!parsed) {
     vscode.window.showWarningMessage("Tekton Intellisense: this doesn't look like a Tekton resource.");
     return;

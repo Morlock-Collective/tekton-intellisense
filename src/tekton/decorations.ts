@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import { ParsedTektonDoc, resolveParamsTarget, stepActionRefs, TASK_LIKE_KINDS, TektonKind, TRIGGER_BINDING_LIKE_KINDS } from "./model";
-import { findParamRefs } from "./paramRefs";
+import { paramRefsIn } from "./paramRefs";
 
 /**
  * Colors are chosen from the workbench color registry (not language-grammar
@@ -36,28 +36,29 @@ function hasReferenceableIdentity(kind: TektonKind): boolean {
 }
 
 /**
- * Highlights every renameable/referenceable name in the document: the
- * `name:` value at every declaration site (params/workspaces/results/task
- * aliases/a resource's own identity), and every place something points at
- * one by name — both `$(...)` syntax (`findParamRefs`) and the plain
- * YAML-field identity system (`taskRef`/`pipelineRef`/`template.ref`/
- * `bindings[].ref`/`triggerRef`/a step's own `ref`, plus a task entry's
- * `workspace:`/`runAfter:`/`params:` bindings) — using matching-but-distinct
- * styles so a declaration ("this is defined here") reads differently from
- * a use ("this points at a declaration"). Mirrors exactly what
- * `resolveRenameTarget` recognizes, so "is this renameable" and "is this
- * highlighted" never drift apart.
+ * Highlights every renameable/referenceable name across every resource in
+ * the document — a plain single-resource file has just the one, but a
+ * multi-document file's siblings are all decorated in the same pass, since
+ * there's no single "current resource" concept for decorations the way
+ * there is for cursor-based features: the `name:` value at every
+ * declaration site (params/workspaces/results/task aliases/a resource's own
+ * identity), and every place something points at one by name — both
+ * `$(...)` syntax (`findParamRefs`) and the plain YAML-field identity system
+ * (`taskRef`/`pipelineRef`/`template.ref`/`bindings[].ref`/`triggerRef`/a
+ * step's own `ref`, plus a task entry's `workspace:`/`runAfter:`/`params:`
+ * bindings) — using matching-but-distinct styles so a declaration ("this is
+ * defined here") reads differently from a use ("this points at a
+ * declaration"). Mirrors exactly what `resolveRenameTarget` recognizes, so
+ * "is this renameable" and "is this highlighted" never drift apart.
  */
-export function updateDecorations(editor: vscode.TextEditor, parsed: ParsedTektonDoc | undefined): void {
-  if (!parsed) {
+export function updateDecorations(editor: vscode.TextEditor, docs: ParsedTektonDoc[]): void {
+  if (docs.length === 0) {
     editor.setDecorations(declarationDecoration, []);
     editor.setDecorations(referenceDecoration, []);
     return;
   }
 
   const document = editor.document;
-  const { symbols } = parsed;
-
   const declRanges: vscode.Range[] = [];
   const refRanges: vscode.Range[] = [];
   const addDecl = (range: [number, number] | undefined) => {
@@ -67,47 +68,51 @@ export function updateDecorations(editor: vscode.TextEditor, parsed: ParsedTekto
     if (range) refRanges.push(rangeFor(document, range[0], range[1]));
   };
 
-  // A TaskRun/PipelineRun using ..Ref provides param *values* (a reference to the referenced
-  // resource's declared params), not a declaration of its own -- same distinction addParameter
-  // and rename already make.
-  const paramsAreBindings = resolveParamsTarget(parsed)?.shape === "binding";
-  for (const p of symbols.params) (paramsAreBindings ? addRef : addDecl)(p.range);
+  for (const parsed of docs) {
+    const { symbols } = parsed;
 
-  for (const w of symbols.workspaces) addDecl(w.range);
-  for (const r of symbols.results) addDecl(r.range);
-  for (const bp of symbols.bindingParams) addDecl(bp.range);
+    // A TaskRun/PipelineRun using ..Ref provides param *values* (a reference to the referenced
+    // resource's declared params), not a declaration of its own -- same distinction addParameter
+    // and rename already make.
+    const paramsAreBindings = resolveParamsTarget(parsed)?.shape === "binding";
+    for (const p of symbols.params) (paramsAreBindings ? addRef : addDecl)(p.range);
 
-  for (const t of symbols.tasks) {
-    addDecl(t.range);
-    addRef(t.taskRefNameRange);
-    for (const wb of t.workspaceBindings) addRef(wb.workspaceNameRange);
-    for (const ra of t.runAfter) addRef(ra.range);
-    for (const pb of t.paramBindings) addRef(pb.range);
-  }
+    for (const w of symbols.workspaces) addDecl(w.range);
+    for (const r of symbols.results) addDecl(r.range);
+    for (const bp of symbols.bindingParams) addDecl(bp.range);
 
-  for (const trigger of symbols.triggers) {
-    addDecl(trigger.range);
-    for (const ref of trigger.bindingRefs) addRef(ref.range);
-    addRef(trigger.templateRefNameRange);
-    addRef(trigger.triggerRefNameRange);
-  }
-
-  addRef(symbols.pipelineRefNameRange);
-  addRef(symbols.taskRefNameRange);
-  addRef(symbols.templateRefNameRange);
-  for (const ref of symbols.bindingRefs) addRef(ref.range);
-  for (const ref of stepActionRefs(parsed)) addRef(ref.range);
-
-  if (symbols.metadataName && hasReferenceableIdentity(symbols.kind)) {
-    addDecl(symbols.metadataNameRange);
-  }
-
-  for (const ref of findParamRefs(parsed.text)) {
-    if (ref.nameStart !== undefined && ref.nameEnd !== undefined) {
-      refRanges.push(rangeFor(document, ref.nameStart, ref.nameEnd));
+    for (const t of symbols.tasks) {
+      addDecl(t.range);
+      addRef(t.taskRefNameRange);
+      for (const wb of t.workspaceBindings) addRef(wb.workspaceNameRange);
+      for (const ra of t.runAfter) addRef(ra.range);
+      for (const pb of t.paramBindings) addRef(pb.range);
     }
-    if (ref.resultNameStart !== undefined && ref.resultNameEnd !== undefined) {
-      refRanges.push(rangeFor(document, ref.resultNameStart, ref.resultNameEnd));
+
+    for (const trigger of symbols.triggers) {
+      addDecl(trigger.range);
+      for (const ref of trigger.bindingRefs) addRef(ref.range);
+      addRef(trigger.templateRefNameRange);
+      addRef(trigger.triggerRefNameRange);
+    }
+
+    addRef(symbols.pipelineRefNameRange);
+    addRef(symbols.taskRefNameRange);
+    addRef(symbols.templateRefNameRange);
+    for (const ref of symbols.bindingRefs) addRef(ref.range);
+    for (const ref of stepActionRefs(parsed)) addRef(ref.range);
+
+    if (symbols.metadataName && hasReferenceableIdentity(symbols.kind)) {
+      addDecl(symbols.metadataNameRange);
+    }
+
+    for (const ref of paramRefsIn(parsed)) {
+      if (ref.nameStart !== undefined && ref.nameEnd !== undefined) {
+        refRanges.push(rangeFor(document, ref.nameStart, ref.nameEnd));
+      }
+      if (ref.resultNameStart !== undefined && ref.resultNameEnd !== undefined) {
+        refRanges.push(rangeFor(document, ref.resultNameStart, ref.resultNameEnd));
+      }
     }
   }
 

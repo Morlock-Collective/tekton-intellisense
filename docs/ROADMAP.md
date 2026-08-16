@@ -201,6 +201,26 @@ need to count what they provide). Skipped entirely, not guessed at, when
 the template or any bound TriggerBinding doesn't resolve at all —
 `checkTriggerRefs` already flags that separately.
 
+**Multi-document YAML support** — a single file with more than one
+`---`-separated resource (a common kubectl-apply/kustomize-build bundling
+pattern) is now fully supported, not just tolerated: `parseTektonFile()`
+(via `parseAllDocuments`) returns one `ParsedTektonDoc` per recognized
+resource in the file, all sharing one `text`/`lineCounter` but each with its
+own `range` marking which slice of the file is actually theirs. Every
+whole-file scan (`$(...)` ref search, `findParamRefs`) is scoped through
+`paramRefsIn()` to a single resource's own range, so siblings in the same
+file never leak references into each other. Every position-based feature
+(hover, go to definition, completions, rename, code actions, the editing
+commands) resolves "which resource is the cursor actually in" via
+`findResourceAt()`; features with no single cursor to consult (diagnostics,
+highlighting, cross-file scans in `workspaceScan.ts`) run across every
+resource in the file instead. `workspaceIndex.ts`'s live index now keys
+each entry by resource (`uri#docIndex`), not by file, so two resources of
+the same kind sharing one file are tracked independently — including the
+existing same-name ambiguity handling, which now also covers two resources
+sharing a name *within* one file, the same way it already covered two
+files sharing a name.
+
 ## Notable bugs found and fixed along the way
 
 - Multi-line inserts only indented their first line correctly; the trailing
@@ -266,16 +286,6 @@ the template or any bound TriggerBinding doesn't resolve at all —
 - Only literal block scalars (`script: |`) are supported for "Edit Task
   Script" — folded (`>`) and quoted/plain scripts are left alone, since
   the dedent math needs consistent per-line indentation to strip.
-- Multi-document YAML (a single file with more than one `---`-separated
-  resource — a common kubectl-apply bundling pattern) isn't supported at
-  all: `parseTektonDocument` uses `parseDocument`, not
-  `parseAllDocuments`, so only the first document in a file is ever seen.
-  Every other resource in that file is completely invisible to every
-  feature. Pinned by a test (`stepaction-and-task-multidoc.yaml`) rather
-  than silently left to regress further; actually supporting it would mean
-  reworking `parseTektonDocument` to return multiple documents and making
-  every position-aware feature aware of which one a given offset falls in
-  — a sizeable, cross-cutting change, not attempted here.
 
 ## Next up
 

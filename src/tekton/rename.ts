@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { parseTektonDocument, ParsedTektonDoc, TektonKind, TASK_LIKE_KINDS, TRIGGER_BINDING_LIKE_KINDS } from "./model";
+import { parseTektonFile, findResourceAt, ParsedTektonDoc, TektonKind, TASK_LIKE_KINDS, TRIGGER_BINDING_LIKE_KINDS } from "./model";
 import {
   resolveRenameTarget,
   RenameTarget,
@@ -98,10 +98,11 @@ export class TektonRenameProvider implements vscode.RenameProvider {
   constructor(private readonly workspaceIndex: TektonWorkspaceIndex) {}
 
   prepareRename(document: vscode.TextDocument, position: vscode.Position): vscode.Range {
-    const parsed = parseTektonDocument(document.getText());
+    const offset = document.offsetAt(position);
+    const parsed = findResourceAt(parseTektonFile(document.getText()), offset);
     if (!parsed) throw new Error("Tekton Intellisense: this isn't a Tekton resource.");
 
-    const target = resolveRenameTarget(parsed, document.offsetAt(position));
+    const target = resolveRenameTarget(parsed, offset);
     if (!target) throw new Error("Tekton Intellisense: nothing renameable here.");
 
     return toVscodeRange(parsed, target.range);
@@ -112,10 +113,11 @@ export class TektonRenameProvider implements vscode.RenameProvider {
     position: vscode.Position,
     newName: string
   ): Promise<vscode.WorkspaceEdit | undefined> {
-    const parsed = parseTektonDocument(document.getText());
+    const offset = document.offsetAt(position);
+    const parsed = findResourceAt(parseTektonFile(document.getText()), offset);
     if (!parsed) return undefined;
 
-    const target = resolveRenameTarget(parsed, document.offsetAt(position));
+    const target = resolveRenameTarget(parsed, offset);
     if (!target) return undefined;
 
     if (!isValidNewName(target.kind, newName)) {

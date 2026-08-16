@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { parseTektonDocument, ParsedTektonDoc, TektonKind } from "./model";
+import { parseTektonFile, ParsedTektonDoc, TektonKind } from "./model";
 
 const YAML_GLOB = "**/*.{yaml,yml}";
 const EXCLUDE_GLOB = "**/{node_modules,.git}/**";
@@ -18,7 +18,10 @@ async function readFileText(uri: vscode.Uri): Promise<string | undefined> {
 /**
  * On-demand (not persistently indexed — `workspaceIndex.ts` covers the
  * "every keystroke" case for Task/Pipeline lookup) list of every workspace
- * document of one of `kinds`. Suitable for rare, latency-tolerant
+ * resource of one of `kinds`, across every `---`-separated document in
+ * every matching file — a file contributes as many entries as it has
+ * matching resources, so a Task and a Pipeline sharing one file each show
+ * up under their own kind's scan. Suitable for rare, latency-tolerant
  * operations like rename or workspace-wide find-references, not anything
  * invoked continuously.
  */
@@ -27,10 +30,11 @@ export async function findWorkspaceDocs(kinds: readonly TektonKind[]): Promise<{
   const found = await Promise.all(
     uris.map(async (uri) => {
       const text = await readFileText(uri);
-      if (text === undefined) return undefined;
-      const parsed = parseTektonDocument(text);
-      return parsed && kinds.includes(parsed.symbols.kind) ? { uri, parsed } : undefined;
+      if (text === undefined) return [];
+      return parseTektonFile(text)
+        .filter((parsed) => kinds.includes(parsed.symbols.kind))
+        .map((parsed) => ({ uri, parsed }));
     })
   );
-  return found.filter((x): x is { uri: vscode.Uri; parsed: ParsedTektonDoc } => !!x);
+  return found.flat();
 }

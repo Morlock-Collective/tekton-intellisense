@@ -193,3 +193,17 @@ export function findParamRefs(text: string): ParamRef[] {
   }
   return refs;
 }
+
+/**
+ * `findParamRefs` scoped to one resource's own span in a possibly
+ * multi-document file (see `ParsedTektonDoc.range`) — `parsed.text` is the
+ * *whole file's* text, shared by every sibling document, so scanning it
+ * unfiltered would attribute another resource's `$(...)` references to this
+ * one (wrongly flagging them as unknown, hovering the wrong declaration,
+ * renaming across a resource boundary that should stop it, ...). Every
+ * caller that used to do `findParamRefs(parsed.text)` before multi-document
+ * support should use this instead.
+ */
+export function paramRefsIn(parsed: { text: string; range: [number, number] }): ParamRef[] {
+  return findParamRefs(parsed.text).filter((ref) => ref.start >= parsed.range[0] && ref.end <= parsed.range[1]);
+}

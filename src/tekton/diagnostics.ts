@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
-import { NamedSymbol, ParsedTektonDoc, parseTektonDocument, RefName, TektonSymbols } from "./model";
-import { findParamRefs, ParamRef } from "./paramRefs";
+import { NamedSymbol, ParsedTektonDoc, parseTektonFile, RefName, TektonSymbols } from "./model";
+import { paramRefsIn, ParamRef } from "./paramRefs";
 import { closestMatch } from "./levenshtein";
 import { findDuplicateGroups } from "./duplicates";
 import { findMissingRunAfter } from "./runAfterCheck";
@@ -334,14 +334,12 @@ function checkRef(
   }
 }
 
-export function computeDiagnostics(document: vscode.TextDocument, workspaceIndex: TektonWorkspaceIndex): vscode.Diagnostic[] {
-  const config = vscode.workspace.getConfiguration("tektonIntellisense");
-  if (!config.get<boolean>("enableDiagnostics", true)) return [];
-
-  const source = document.getText();
-  const parsed = parseTektonDocument(source);
-  if (!parsed) return [];
-
+/** Every diagnostic for one resource within a (possibly multi-document) file. */
+function computeResourceDiagnostics(
+  document: vscode.TextDocument,
+  parsed: ParsedTektonDoc,
+  workspaceIndex: TektonWorkspaceIndex
+): vscode.Diagnostic[] {
   const diagnostics: vscode.Diagnostic[] = [
     ...checkDuplicateNames(document, parsed.symbols.params, "parameter"),
     ...checkDuplicateNames(document, parsed.symbols.workspaces, "workspace"),
@@ -354,8 +352,7 @@ export function computeDiagnostics(document: vscode.TextDocument, workspaceIndex
     ...checkTriggerTemplateParamWiring(document, parsed.symbols, workspaceIndex),
   ];
 
-  const refs = findParamRefs(parsed.text);
-  for (const ref of refs) {
+  for (const ref of paramRefsIn(parsed)) {
     const problem = checkRef(ref, parsed.symbols);
     if (!problem) continue;
 
@@ -377,4 +374,13 @@ export function computeDiagnostics(document: vscode.TextDocument, workspaceIndex
   }
 
   return diagnostics;
+}
+
+/** Computes diagnostics across every `---`-separated resource in the file, concatenated — a multi-document file gets each of its resources checked independently, on its own symbol table. */
+export function computeDiagnostics(document: vscode.TextDocument, workspaceIndex: TektonWorkspaceIndex): vscode.Diagnostic[] {
+  const config = vscode.workspace.getConfiguration("tektonIntellisense");
+  if (!config.get<boolean>("enableDiagnostics", true)) return [];
+
+  const docs = parseTektonFile(document.getText());
+  return docs.flatMap((parsed) => computeResourceDiagnostics(document, parsed, workspaceIndex));
 }

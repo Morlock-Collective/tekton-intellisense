@@ -8,7 +8,7 @@
 import * as vscode from "vscode";
 import * as os from "os";
 import * as path from "path";
-import { parseTektonDocument } from "../tekton/model";
+import { parseTektonFile } from "../tekton/model";
 import { EmbeddedScriptBlock, findEmbeddedScriptBlocks, LANGUAGE_EXTENSIONS, reindentScriptContent } from "../tekton/scriptEmbed";
 
 /**
@@ -92,13 +92,16 @@ export async function editTaskScriptCommand(): Promise<void> {
   if (!editor) return;
 
   const document = editor.document;
-  const parsed = parseTektonDocument(document.getText());
-  if (!parsed) {
+  const docs = parseTektonFile(document.getText());
+  if (docs.length === 0) {
     vscode.window.showWarningMessage("Tekton Intellisense: this doesn't look like a Tekton resource.");
     return;
   }
 
-  const blocks = findEmbeddedScriptBlocks(parsed);
+  // Blocks are gathered across every resource in the file (not just the one under the cursor) --
+  // a script block's own offset range is what actually identifies it, so there's no reason to
+  // restrict the picker fallback to one resource in a multi-document file.
+  const blocks = docs.flatMap(findEmbeddedScriptBlocks);
   if (blocks.length === 0) {
     vscode.window.showWarningMessage(
       "Tekton Intellisense: no script: block here with a recognized shebang (#!/usr/bin/env bash, python3, node, ...)."
@@ -139,13 +142,14 @@ async function closeTabsFor(uri: vscode.Uri): Promise<void> {
 /** Writes `savedDocument`'s current text back into its registered host document's script block, re-indented to fit, then closes the scratch tab and jumps back to the host document at that block. */
 async function writeBackToHost(savedDocument: vscode.TextDocument, registration: ScratchRegistration): Promise<void> {
   const hostDocument = await vscode.workspace.openTextDocument(registration.hostUri);
-  const parsed = parseTektonDocument(hostDocument.getText());
-  if (!parsed) return;
+  const docs = parseTektonFile(hostDocument.getText());
+  if (docs.length === 0) return;
 
   // Re-resolved fresh, not from a range captured when the scratch file was opened -- the host
   // document may have changed since (other edits, or simply reflowed offsets), so identity here
-  // is the step's own name, not a position.
-  const block = findEmbeddedScriptBlocks(parsed).find(
+  // is the step's own name, not a position. Searched across every resource in the host file, same
+  // as the picker in editTaskScriptCommand.
+  const block = docs.flatMap(findEmbeddedScriptBlocks).find(
     (b) => b.containerName === registration.containerName && b.languageId === registration.languageId
   );
   if (!block) {

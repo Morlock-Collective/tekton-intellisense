@@ -4,6 +4,8 @@ const fs = require("fs");
 const path = require("path");
 const {
   parseTektonDocument,
+  parseTektonFile,
+  findResourceAt,
   resolveParamsTarget,
   resolvePipelineSpecOwner,
   resolveTaskSpecOwner,
@@ -608,18 +610,34 @@ console.log("\nrename: step ref (StepAction identity), same-doc and cross-file:"
   }
 }
 
-console.log("\nmulti-document YAML: known limitation, only the first document in a file is recognized:");
+console.log("\nmulti-document YAML: every `---`-separated resource in a file is parsed:");
 {
-  // Pinned deliberately, not celebrated -- stepaction-and-task-multidoc.yaml bundles a StepAction
-  // and a Task (referencing it) via `---` in one file, a common kubectl-apply pattern. parseDocument
-  // (not parseAllDocuments) means the Task is entirely invisible; this documents that boundary so a
-  // future change to it is a deliberate decision, not an unnoticed regression either way.
+  // stepaction-and-task-multidoc.yaml bundles a StepAction and a Task (referencing it via
+  // `ref:`) via `---` in one file, a common kubectl-apply/kustomize-build pattern.
   const source = fs.readFileSync(path.join(__dirname, "stepaction-and-task-multidoc.yaml"), "utf8");
-  const parsed = parseTektonDocument(source);
-  const ok = parsed?.symbols.kind === "StepAction" && parsed?.symbols.metadataName === "shared-lint1";
-  console.log(`  [${ok ? "PASS" : "FAIL"}] only the first document (StepAction "shared-lint1") is seen; the second (Task "build") is not`);
+  const docs = parseTektonFile(source);
+  const stepAction = docs.find((d) => d.symbols.kind === "StepAction");
+  const task = docs.find((d) => d.symbols.kind === "Task");
+  const bothSeen = docs.length === 2 && stepAction?.symbols.metadataName === "shared-lint1" && task?.symbols.metadataName === "build";
+
+  // Each resource's own offset range is disjoint and doesn't leak the other's -- a cursor
+  // anywhere in the StepAction resolves to it, not to the Task, and vice versa.
+  const stepActionOffset = source.indexOf("shared-lint1");
+  const taskOffset = source.lastIndexOf("shared-lint1"); // the Task's own `ref: name: shared-lint1`
+  const resolvedForStepAction = findResourceAt(docs, stepActionOffset);
+  const resolvedForTask = findResourceAt(docs, taskOffset);
+  const resourcesDisjoint = resolvedForStepAction?.symbols.kind === "StepAction" && resolvedForTask?.symbols.kind === "Task";
+
+  // The Task's step `ref: shared-lint1` is a same-*file*, cross-*document* reference -- exactly
+  // the case `findWorkspaceDocs`/rename/references now handle uniformly, since a multi-document
+  // file contributes one entry per resource rather than one per file.
+  const crossDocEdits = taskRefIdentityEdits(task, "shared-lint1", "shared-lint-renamed");
+  const crossDocOk = crossDocEdits.length === 1 && applyTextEdits(source, crossDocEdits).includes("shared-lint-renamed");
+
+  const ok = bothSeen && resourcesDisjoint && crossDocOk;
+  console.log(`  [${ok ? "PASS" : "FAIL"}] both resources seen(${bothSeen}), each offset resolves to its own resource(${resourcesDisjoint}), cross-document step ref rename(${crossDocOk})`);
   if (!ok) {
-    console.log({ kind: parsed?.symbols.kind, metadataName: parsed?.symbols.metadataName });
+    console.log({ count: docs.length, stepAction: stepAction?.symbols.metadataName, task: task?.symbols.metadataName, crossDocEdits });
     failures++;
   }
 }
@@ -1874,7 +1892,7 @@ console.log("\nHighlighting: identity system + plain-scalar bindings decorated s
     const document = makeDocument(text);
     const calls = [];
     const editor = { document, setDecorations: (_type, ranges) => calls.push(ranges) };
-    updateDecorations(editor, parseTektonDocument(text));
+    updateDecorations(editor, parseTektonFile(text));
     const textOf = (range) => text.slice(document.offsetAt(range.start), document.offsetAt(range.end));
     return { decl: (calls[0] ?? []).map(textOf), ref: (calls[1] ?? []).map(textOf) };
   }

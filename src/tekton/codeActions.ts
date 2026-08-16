@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import { isSeq } from "yaml";
 import { DIAGNOSTIC_SOURCE } from "./diagnostics";
-import { findEnclosingTaskEntry, parseTektonDocument, trimTrailingNewline } from "./model";
+import { findEnclosingTaskEntry, parseTektonFile, findResourceAt, trimTrailingNewline } from "./model";
 import { blockAfterText } from "../commands/snippetText";
 import { indentAt } from "../commands/editUtils";
 
@@ -44,10 +44,11 @@ export class TektonRefCodeActionProvider implements vscode.CodeActionProvider {
   }
 
   private addRunAfterFix(document: vscode.TextDocument, diagnostic: vscode.Diagnostic, taskName: string): vscode.CodeAction | undefined {
-    const parsed = parseTektonDocument(document.getText());
+    const offset = document.offsetAt(diagnostic.range.start);
+    const parsed = findResourceAt(parseTektonFile(document.getText()), offset);
     if (!parsed) return undefined;
 
-    const entryMap = findEnclosingTaskEntry(parsed, document.offsetAt(diagnostic.range.start));
+    const entryMap = findEnclosingTaskEntry(parsed, offset);
     if (!entryMap?.range) return undefined;
 
     const action = new vscode.CodeAction(`Add "${taskName}" to runAfter`, vscode.CodeActionKind.QuickFix);
