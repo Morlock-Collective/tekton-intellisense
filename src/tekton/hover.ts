@@ -63,6 +63,22 @@ function taskResultHover(task: TaskSymbol, resultName: string, workspaceIndex: T
   return md(`${header}\n\n_Not resolved: taskRef \`${task.taskRefName ?? "?"}\` isn't indexed in this workspace._`);
 }
 
+/** Hover for a `params: [{name, value}]` binding — a Pipeline task entry's own (scoped to that entry) or a TaskRun's own top-level one — against the referenced Task's declared param. */
+function taskParamHover(paramName: string, taskRefName: string, workspaceIndex: TektonWorkspaceIndex): vscode.MarkdownString {
+  const resolved = workspaceIndex.lookupTask(taskRefName);
+  const param = resolved?.params.find((p) => p.name === paramName);
+  const header = `**${paramName}** — param binding (taskRef: \`${taskRefName}\`)`;
+  if (param) {
+    const lines = [header, "", `*${param.type ?? "string"} param*`];
+    if (param.description) lines.push("", param.description);
+    if (param.default !== undefined) lines.push("", `Default: \`${param.default}\``);
+    return md(lines.join("\n"));
+  }
+  return md(
+    `${header}\n\n_Not resolved: taskRef \`${taskRefName}\` isn't indexed in this workspace, or declares no param named "${paramName}"._`
+  );
+}
+
 /** Hover card for a resource's own identity (metadata.name), shown whether the cursor is on the declaration or a reference to it (taskRef/pipelineRef/template.ref/bindings[].ref/triggerRef). */
 function identityHover(kindLabel: string, record: IndexedResource): vscode.MarkdownString {
   const symbols = record.parsed.symbols;
@@ -165,6 +181,10 @@ export class TektonHoverProvider implements vscode.HoverProvider {
   private identityHoverAt(parsed: ParsedTektonDoc, offset: number, document: vscode.TextDocument): vscode.Hover | undefined {
     const target = resolveRenameTarget(parsed, offset);
     if (!target) return undefined;
+
+    if (target.kind === "task-param") {
+      return new vscode.Hover(taskParamHover(target.paramName, target.taskRefName, this.workspaceIndex), rangeOf(document, target.range));
+    }
 
     let record: IndexedResource | undefined;
     let kindLabel: string;

@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { NamedSymbol, ParsedTektonDoc, parseTektonFile, RefName, TektonSymbols } from "./model";
+import { NamedSymbol, ParamSymbol, ParsedTektonDoc, parseTektonFile, RefName, TektonSymbols } from "./model";
 import { paramRefsIn, ParamRef } from "./paramRefs";
 import { closestMatch } from "./levenshtein";
 import { findDuplicateGroups } from "./duplicates";
@@ -77,6 +77,52 @@ function checkTaskWorkspaceBindings(document: vscode.TextDocument, symbols: Tekt
       diagnostic.source = DIAGNOSTIC_SOURCE;
       if (suggestion) diagnostic.code = `suggest:${suggestion}`;
       diagnostics.push(diagnostic);
+    }
+  }
+
+  return diagnostics;
+}
+
+/**
+ * Flags a `params: [{name, value}]` binding — a Pipeline task entry's own
+ * (scoped to that entry) or a TaskRun's own top-level one — whose `name`
+ * doesn't match any param the referenced Task/ClusterTask actually
+ * declares. Only checked once the taskRef itself resolves — an unresolved
+ * taskRef isn't flagged by any check today, so guessing at its params here
+ * too would just be noise on top of a problem this can't itself describe.
+ */
+function checkTaskParamBindings(document: vscode.TextDocument, symbols: TektonSymbols, workspaceIndex: TektonWorkspaceIndex): vscode.Diagnostic[] {
+  const diagnostics: vscode.Diagnostic[] = [];
+
+  const flagUnknown = (paramName: string, range: [number, number] | undefined, taskRefName: string, declared: ParamSymbol[]) => {
+    if (!range) return;
+    const names = declared.map((p) => p.name);
+    if (names.includes(paramName)) return;
+
+    const suggestion = closestMatch(paramName, names);
+    const diagnostic = new vscode.Diagnostic(
+      new vscode.Range(offsetToPosition(document, range[0]), offsetToPosition(document, range[1])),
+      suggestion
+        ? `Unknown parameter "${paramName}" for taskRef "${taskRefName}". Did you mean "${suggestion}"?`
+        : `Unknown parameter "${paramName}" for taskRef "${taskRefName}". Declared params: ${names.join(", ") || "(none)"}.`,
+      vscode.DiagnosticSeverity.Warning
+    );
+    diagnostic.source = DIAGNOSTIC_SOURCE;
+    if (suggestion) diagnostic.code = `suggest:${suggestion}`;
+    diagnostics.push(diagnostic);
+  };
+
+  for (const task of symbols.tasks) {
+    if (!task.taskRefName) continue;
+    const resolved = workspaceIndex.lookupTask(task.taskRefName);
+    if (!resolved) continue;
+    for (const pb of task.paramBindings) flagUnknown(pb.name, pb.range, task.taskRefName, resolved.params);
+  }
+
+  if (symbols.kind === "TaskRun" && symbols.taskRefName) {
+    const resolved = workspaceIndex.lookupTask(symbols.taskRefName);
+    if (resolved) {
+      for (const p of symbols.params) flagUnknown(p.name, p.range, symbols.taskRefName, resolved.params);
     }
   }
 
@@ -347,6 +393,7 @@ function computeResourceDiagnostics(
     ...checkDuplicateNames(document, parsed.symbols.tasks, "task"),
     ...checkDuplicateNames(document, parsed.symbols.bindingParams, "binding parameter"),
     ...checkTaskWorkspaceBindings(document, parsed.symbols),
+    ...checkTaskParamBindings(document, parsed.symbols, workspaceIndex),
     ...checkMissingRunAfter(document, parsed),
     ...checkTriggerRefs(document, parsed.symbols, workspaceIndex),
     ...checkTriggerTemplateParamWiring(document, parsed.symbols, workspaceIndex),

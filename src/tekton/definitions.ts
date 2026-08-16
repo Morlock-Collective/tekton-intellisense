@@ -86,6 +86,13 @@ export class TektonDefinitionProvider implements vscode.DefinitionProvider {
     const target = resolveRenameTarget(parsed, offset);
     if (!target) return undefined;
 
+    if (target.kind === "task-param") {
+      const taskRecord = this.workspaceIndex.lookupTaskRecord(target.taskRefName);
+      const param = taskRecord?.parsed.symbols.params.find((p) => p.name === target.paramName);
+      if (!taskRecord || !param?.range) return undefined;
+      return new vscode.Location(taskRecord.uri, toVscodeRange(taskRecord.parsed, param.range));
+    }
+
     const record = (() => {
       switch (target.kind) {
         case "task-identity":

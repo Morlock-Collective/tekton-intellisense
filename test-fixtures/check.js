@@ -713,6 +713,41 @@ console.log("\nmulti-document YAML: every recognized TektonKind, one file (all-k
   }
 }
 
+console.log("\ntask-param binding: hover/go-to-definition/diagnostic all resolve against the referenced Task's declared param:");
+{
+  // hover.ts/definitions.ts/diagnostics.ts each need real vscode classes (vscode.Hover,
+  // vscode.Location, vscode.Diagnostic) this harness doesn't shim -- so, same as the trigger
+  // ref-validation blocks above, this mirrors the resolution logic in plain JS against
+  // resolveRenameTarget (vscode-free) and a tiny fake index standing in for
+  // TektonWorkspaceIndex.lookupTask.
+  const source = fs.readFileSync(path.join(__dirname, "all-kinds-multidoc.yaml"), "utf8");
+  const docs = parseTektonFile(source);
+  const pipeline = docs.find((d) => d.symbols.metadataName === "mdk-pipeline");
+  const task = docs.find((d) => d.symbols.metadataName === "mdk-task");
+  const fakeIndex = { lookupTask: (name) => (name === "mdk-task" ? task.symbols : undefined) };
+
+  // cursor on the Pipeline task entry's own `params: [{name: greeting, ...}]` binding
+  const bindingOffset = source.indexOf("- name: greeting\n          value: $(params.greeting)") + "- name: ".length;
+  const target = resolveRenameTarget(pipeline, bindingOffset);
+  const targetOk = target?.kind === "task-param" && target.paramName === "greeting" && target.taskRefName === "mdk-task";
+
+  // hover/definition: resolve the binding's paramName against the referenced Task's own declared param
+  const resolvedParam = targetOk && fakeIndex.lookupTask(target.taskRefName)?.params.find((p) => p.name === target.paramName);
+  const hoverOk = resolvedParam?.type === "string" && resolvedParam?.description === "The very important greeting parameter";
+
+  // diagnostic: an unknown binding name against the same resolved Task should be flagged, a known one shouldn't
+  const knownNames = task.symbols.params.map((p) => p.name);
+  const flagged = (name) => !knownNames.includes(name);
+  const diagnosticOk = flagged("not-a-real-param") === true && flagged("greeting") === false;
+
+  const ok = targetOk && hoverOk && diagnosticOk;
+  console.log(`  [${ok ? "PASS" : "FAIL"}] target resolves(${targetOk}), hover/definition resolves the declared param(${hoverOk}), diagnostic flags unknown/accepts known(${diagnosticOk})`);
+  if (!ok) {
+    console.log({ target, resolvedParam, knownNames });
+    failures++;
+  }
+}
+
 console.log("\nrename: duplicate-name ambiguity trap detection:");
 {
   // Two different Task files legitimately declaring the same metadata.name

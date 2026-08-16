@@ -22,6 +22,7 @@ spec:
   params:
     - name: greeting
       type: string
+      description: The very important greeting parameter
       default: hello
   results:
     - name: digest
