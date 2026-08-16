@@ -150,8 +150,9 @@ first and abandoned — every request needed a language server's first-ever
 look at a brand-new document, which in practice just meant permanently
 empty results, not occasionally slow ones. Reused the same
 shebang-detection/dedent/offset-math groundwork afterward, since that part
-was never what was broken. See Known limitations for the scratch-location
-question that took three attempts to settle (still open for Windows).
+was never what was broken. The `os.tmpdir()` scratch location took three
+attempts to settle on (see Notable bugs below) and is now confirmed
+working on both Linux and Windows.
 
 **TriggerTemplate param-wiring check** (`diagnostics.ts`) — flags an
 EventListener trigger entry (or standalone Trigger) whose bound
@@ -230,21 +231,11 @@ the template or any bound TriggerBinding doesn't resolve at all —
 - Interceptor/ClusterInterceptor aren't recognized document kinds — they're
   normally cluster-installed (`github`/`cel`/`slack`/...), not hand-authored
   per chart. An interceptor's `ref.name` is an unvalidated string.
-- "Edit Task Script" scratch files live under `os.tmpdir()`, confirmed to
-  get full IntelliSense on Linux; not yet validated on Windows/macOS. If
-  it turns out not to work cross-platform, the fallback that's already
-  known to work is putting them under
-  `<workspace-folder>/.vscode/tekton-script-edits` instead (tried and
-  confirmed before `os.tmpdir()`, abandoned only because it pollutes the
-  user's project for no benefit once the temp-dir approach also worked).
 - Only literal block scalars (`script: |`) are supported for "Edit Task
   Script" — folded (`>`) and quoted/plain scripts are left alone, since
   the dedent math needs consistent per-line indentation to strip.
 
 ## Next up
-
-- [ ] Validate "Edit Task Script" scratch files on Windows/macOS, not just
-      Linux.
 
 Publishing to the VS Code Marketplace / Open VSX is being done manually by
 the maintainer once a release is judged stable — not tracked here.
