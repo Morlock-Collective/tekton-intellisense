@@ -7,6 +7,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 - "Bind All Parameters to Environment Variables" command
 - Rename support for a step's `ref` (StepAction identity), cross-file
+- Rename support for a Task's declared param against a `taskRef`'d binding's name, cross-file
 
 ### Fixed
 - Workspace rename didn't update or work from task-level `workspace:` bindings

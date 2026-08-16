@@ -85,6 +85,23 @@ propagation with a warning; renaming *from* an ambiguous reference is
 rejected outright, since there's no way to know which declaration it
 means.
 
+Three rename gaps closed after the README's claims turned out not to
+match reality for anything outside `$(...)` syntax: a task's `workspaces:
+[{name, workspace}]` binding and another task's `runAfter: [name, ...]`
+entry are both plain YAML fields, not `$(...)` refs, and neither
+`resolveRenameTarget` nor `sameDocumentEdits` accounted for them at all —
+fixed by teaching both about these fields directly. Separately, a step's
+own `ref: { name }` (pointing at a shared `StepAction`) now renames too,
+reusing the existing `task-identity` machinery since a StepAction already
+shares Task/ClusterTask's identity namespace. And a Task's declared param
+now renames across a `taskRef`'d binding's `name:` field (a Pipeline task
+entry's own, or a TaskRun's), mirroring how a Task's declared *result*
+already cross-file-renamed via `$(tasks.X.results.Y)` — just for a plain
+field instead of `$(...)` syntax. Deliberately not covered: a Pipeline
+task entry using an inline `taskSpec` (its params bind to its own
+same-document declaration, a different case) and PipelineRun/Pipeline
+params (the identical gap one level up — see Next up).
+
 **Editing commands** (Command Palette / context menu) — all resolve
 *where* to insert from the document's structure rather than cursor
 position, wherever that's well-defined (`Add Parameter`, `Add Task`);
@@ -251,6 +268,11 @@ the template or any bound TriggerBinding doesn't resolve at all —
   the dedent math needs consistent per-line indentation to strip.
 
 ## Next up
+
+- [ ] PipelineRun/Pipeline param rename: a PipelineRun's own `spec.params`
+      binding (when using `pipelineRef`) should cross-file-rename against
+      its Pipeline's declared param, same shape as the Task-param rename
+      just added one level down.
 
 Publishing to the VS Code Marketplace / Open VSX is being done manually by
 the maintainer once a release is judged stable — not tracked here.
