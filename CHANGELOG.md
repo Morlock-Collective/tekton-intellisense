@@ -4,6 +4,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-16
+
 ### Added
 - "Bind All Parameters to Environment Variables" command
 - Rename support for a step's `ref` (StepAction identity), cross-file
