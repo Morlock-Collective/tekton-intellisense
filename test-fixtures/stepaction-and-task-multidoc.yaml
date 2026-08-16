@@ -7,7 +7,7 @@
 apiVersion: tekton.dev/v1
 kind: StepAction
 metadata:
-  name: shared-lint
+  name: shared-lint1
 spec:
   image: alpine
   script: |
@@ -22,7 +22,7 @@ spec:
   steps:
     - name: lint
       ref:
-        name: shared-lint
+        name: shared-lint1
     - name: compile
       image: golang
       script: go build ./...

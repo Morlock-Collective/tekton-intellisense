@@ -616,8 +616,8 @@ console.log("\nmulti-document YAML: known limitation, only the first document in
   // future change to it is a deliberate decision, not an unnoticed regression either way.
   const source = fs.readFileSync(path.join(__dirname, "stepaction-and-task-multidoc.yaml"), "utf8");
   const parsed = parseTektonDocument(source);
-  const ok = parsed?.symbols.kind === "StepAction" && parsed?.symbols.metadataName === "shared-lint";
-  console.log(`  [${ok ? "PASS" : "FAIL"}] only the first document (StepAction "shared-lint") is seen; the second (Task "build") is not`);
+  const ok = parsed?.symbols.kind === "StepAction" && parsed?.symbols.metadataName === "shared-lint1";
+  console.log(`  [${ok ? "PASS" : "FAIL"}] only the first document (StepAction "shared-lint1") is seen; the second (Task "build") is not`);
   if (!ok) {
     console.log({ kind: parsed?.symbols.kind, metadataName: parsed?.symbols.metadataName });
     failures++;
@@ -1809,6 +1809,128 @@ console.log("\nPipeline task entry's inline taskSpec: steps/sidecars recognized 
   const okBlocks = blocks.length === 1 && blocks[0].languageId === "python" && blocks[0].containerName === "build-step";
   console.log(`  [${okBlocks ? "PASS" : "FAIL"}] findEmbeddedScriptBlocks finds the python shebang inside an inline-taskSpec step: ${JSON.stringify(blocks.map((b) => ({ lang: b.languageId, name: b.containerName })))}`);
   if (!okBlocks) failures++;
+}
+
+console.log("\nHighlighting: identity system + plain-scalar bindings decorated same as $(...) refs:");
+{
+  // decorations.ts imports "vscode" for Range/Position/ThemeColor and to create decoration types
+  // at module load -- same minimal in-process shim approach as the completion-provider tests above.
+  class Position {
+    constructor(line, character) {
+      this.line = line;
+      this.character = character;
+    }
+  }
+  class Range {
+    constructor(a, b, c, d) {
+      if (typeof a === "number") {
+        this.start = new Position(a, b);
+        this.end = new Position(c, d);
+      } else {
+        this.start = a;
+        this.end = b;
+      }
+    }
+  }
+  class ThemeColor {
+    constructor(id) {
+      this.id = id;
+    }
+  }
+  const vscodeShim = {
+    Position,
+    Range,
+    ThemeColor,
+    window: { createTextEditorDecorationType: (opts) => ({ opts, dispose() {} }) },
+  };
+
+  const Module = require("module");
+  const originalLoad = Module._load;
+  Module._load = function (request, ...rest) {
+    if (request === "vscode") return vscodeShim;
+    return originalLoad.call(this, request, ...rest);
+  };
+  const { updateDecorations } = require("../out/tekton/decorations");
+  Module._load = originalLoad;
+
+  function makeDocument(text) {
+    const lines = text.split("\n");
+    const lineOffsets = [0];
+    for (const l of lines.slice(0, -1)) lineOffsets.push(lineOffsets[lineOffsets.length - 1] + l.length + 1);
+    return {
+      getText: () => text,
+      offsetAt: (pos) => lineOffsets[pos.line] + pos.character,
+      positionAt: (offset) => {
+        let line = 0;
+        while (line + 1 < lineOffsets.length && lineOffsets[line + 1] <= offset) line++;
+        return new Position(line, offset - lineOffsets[line]);
+      },
+    };
+  }
+
+  /** Runs updateDecorations against `file` and returns the decorated substrings (not ranges) -- decl (1st setDecorations call) and ref (2nd), matching updateDecorations' fixed call order. */
+  function decorate(file) {
+    const text = fs.readFileSync(path.join(__dirname, file), "utf8");
+    const document = makeDocument(text);
+    const calls = [];
+    const editor = { document, setDecorations: (_type, ranges) => calls.push(ranges) };
+    updateDecorations(editor, parseTektonDocument(text));
+    const textOf = (range) => text.slice(document.offsetAt(range.start), document.offsetAt(range.end));
+    return { decl: (calls[0] ?? []).map(textOf), ref: (calls[1] ?? []).map(textOf) };
+  }
+
+  const pipeline = decorate("pipeline-workspace.yaml");
+  const okWorkspace =
+    pipeline.decl.includes("shared-workspace") && // spec.workspaces[] declaration
+    pipeline.decl.includes("build") && // pipeline task alias declaration
+    pipeline.ref.includes("build-image") && // taskRef.name
+    pipeline.ref.includes("shared-workspace"); // task's own workspace: binding
+  console.log(`  [${okWorkspace ? "PASS" : "FAIL"}] pipeline-workspace.yaml: taskRef.name and workspace: binding decorated as references`);
+  if (!okWorkspace) {
+    console.log(pipeline);
+    failures++;
+  }
+
+  const runAfter = decorate("pipeline-missing-runafter.yaml");
+  const okRunAfter = runAfter.ref.filter((t) => t === "build").length >= 1; // audit's runAfter: [build] entry
+  console.log(`  [${okRunAfter ? "PASS" : "FAIL"}] pipeline-missing-runafter.yaml: runAfter: [build] entry decorated as a reference`);
+  if (!okRunAfter) {
+    console.log(runAfter);
+    failures++;
+  }
+
+  const stepRef = decorate("task-uses-stepaction.yaml");
+  const okStepRef = stepRef.ref.includes("shared-lint");
+  console.log(`  [${okStepRef ? "PASS" : "FAIL"}] task-uses-stepaction.yaml: step's ref.name decorated as a reference`);
+  if (!okStepRef) {
+    console.log(stepRef);
+    failures++;
+  }
+
+  const stepDecl = decorate("stepaction-lint.yaml");
+  const okStepDecl = stepDecl.decl.includes("shared-lint");
+  console.log(`  [${okStepDecl ? "PASS" : "FAIL"}] stepaction-lint.yaml: StepAction's own metadata.name decorated as a declaration`);
+  if (!okStepDecl) {
+    console.log(stepDecl);
+    failures++;
+  }
+
+  const taskRun = decorate("taskrun-ref.yaml");
+  const okTaskRunBinding = taskRun.ref.includes("image") && !taskRun.decl.includes("image");
+  console.log(`  [${okTaskRunBinding ? "PASS" : "FAIL"}] taskrun-ref.yaml: own params: binding (using taskRef) decorated as a reference, not a declaration`);
+  if (!okTaskRunBinding) {
+    console.log(taskRun);
+    failures++;
+  }
+
+  const eventListener = decorate("eventlistener-crossfile.yaml");
+  const okTrigger =
+    eventListener.ref.includes("github-binding") && eventListener.ref.includes("build-template") && eventListener.decl.includes("github-push");
+  console.log(`  [${okTrigger ? "PASS" : "FAIL"}] eventlistener-crossfile.yaml: bindings[].ref/template.ref decorated as references, trigger entry name as a declaration`);
+  if (!okTrigger) {
+    console.log(eventListener);
+    failures++;
+  }
 }
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) FAILED.`);
