@@ -303,6 +303,56 @@ console.log("\nrename: same-document param/workspace/task-alias:");
   }
 }
 
+console.log("\nrename: workspace, declaration <-> task-level workspace binding:");
+{
+  // The task-level `workspaces: [{name, workspace}]` binding is a plain YAML field value, not
+  // $(...) syntax -- a separate mechanism from `$(workspaces.NAME...)` refs that both
+  // resolveRenameTarget and sameDocumentEdits previously never looked at at all.
+  const file = "pipeline-workspace.yaml";
+  const source = fs.readFileSync(path.join(__dirname, file), "utf8");
+  const parsed = parseTektonDocument(source);
+
+  // From the declaration: must also update the task's `workspace: shared-workspace` binding.
+  const declOffset = source.indexOf("shared-workspace") + 3;
+  const declTarget = resolveRenameTarget(parsed, declOffset);
+  const declEdits = declTarget ? sameDocumentEdits(parsed, declTarget.kind, declTarget.name, "renamed-ws") : [];
+  const declResult = applyTextEdits(source, declEdits);
+  let declAfter;
+  try {
+    declAfter = parseTektonDocument(declResult);
+  } catch {
+    declAfter = undefined;
+  }
+  const okFromDecl =
+    declTarget?.kind === "workspace" &&
+    declTarget.name === "shared-workspace" &&
+    declEdits.length === 2 && // declaration + the task's workspace: binding
+    declAfter?.symbols.workspaces.some((w) => w.name === "renamed-ws") &&
+    declAfter?.symbols.tasks.some((t) => t.workspaceBindings.some((wb) => wb.workspaceName === "renamed-ws")) &&
+    !declResult.includes("shared-workspace");
+  console.log(`  [${okFromDecl ? "PASS" : "FAIL"}] ${file}: from declaration, "shared-workspace" -> "renamed-ws" (${declEdits.length} edits)`);
+  if (!okFromDecl) {
+    console.log({ declTarget, declEdits });
+    failures++;
+  }
+
+  // From the point of use (the task's workspace: binding value, not the declaration) -- must
+  // resolve to a renameable target at all, and produce the identical edit set.
+  const useOffset = source.lastIndexOf("shared-workspace") + 3;
+  const useTarget = resolveRenameTarget(parsed, useOffset);
+  const useEdits = useTarget ? sameDocumentEdits(parsed, useTarget.kind, useTarget.name, "renamed-ws") : [];
+  const okFromUse =
+    useOffset !== declOffset &&
+    useTarget?.kind === "workspace" &&
+    useTarget.name === "shared-workspace" &&
+    useEdits.length === 2;
+  console.log(`  [${okFromUse ? "PASS" : "FAIL"}] ${file}: rename initiated from the task's workspace: binding (point of use), not just the declaration`);
+  if (!okFromUse) {
+    console.log({ useTarget, useEdits });
+    failures++;
+  }
+}
+
 console.log("\nrename: cross-file result (Task result <-> tasks.X.results.Y):");
 {
   const taskSource = fs.readFileSync(path.join(__dirname, "task-build-image.yaml"), "utf8");

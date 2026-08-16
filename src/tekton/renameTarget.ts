@@ -46,6 +46,11 @@ export function resolveRenameTarget(parsed: ParsedTektonDoc, offset: number): Re
     if (t.taskRefName && inRange(t.taskRefNameRange, offset)) {
       return { kind: "task-identity", name: t.taskRefName, range: t.taskRefNameRange! };
     }
+    for (const wb of t.workspaceBindings) {
+      if (wb.workspaceName && inRange(wb.workspaceNameRange, offset)) {
+        return { kind: "workspace", name: wb.workspaceName, range: wb.workspaceNameRange! };
+      }
+    }
   }
   if (symbols.metadataName && TASK_LIKE_KINDS.has(symbols.kind) && inRange(symbols.metadataNameRange, offset)) {
     return { kind: "task-identity", name: symbols.metadataName, range: symbols.metadataNameRange! };
@@ -133,7 +138,14 @@ export interface TextEdit {
   newText: string;
 }
 
-/** Every same-document occurrence (declaration + $(...) refs) of a param/workspace/task-alias, ready to rename. */
+/**
+ * Every same-document occurrence of a param/workspace/task-alias, ready to
+ * rename: the declaration, any `$(...)` reference to it, and — for a
+ * workspace specifically — every task's own `workspaces: [{name,
+ * workspace}]` binding pointing at it. That binding is a plain YAML field
+ * value (`workspace: NAME`), not `$(...)` syntax, so `findParamRefs` alone
+ * never sees it.
+ */
 export function sameDocumentEdits(
   parsed: ParsedTektonDoc,
   kind: "param" | "workspace" | "task-alias",
@@ -152,6 +164,16 @@ export function sameDocumentEdits(
     if (ref.kind !== refKind || ref.name !== name) continue;
     if (ref.nameStart === undefined || ref.nameEnd === undefined) continue;
     edits.push({ range: [ref.nameStart, ref.nameEnd], newText: newName });
+  }
+
+  if (kind === "workspace") {
+    for (const t of symbols.tasks) {
+      for (const wb of t.workspaceBindings) {
+        if (wb.workspaceName === name && wb.workspaceNameRange) {
+          edits.push({ range: wb.workspaceNameRange, newText: newName });
+        }
+      }
+    }
   }
 
   return edits;
