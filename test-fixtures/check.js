@@ -353,6 +353,53 @@ console.log("\nrename: workspace, declaration <-> task-level workspace binding:"
   }
 }
 
+console.log("\nrename: task alias, declaration <-> other tasks' runAfter entries:");
+{
+  // A task alias appearing in another task's runAfter: [name, ...] is a plain YAML scalar, not
+  // $(...) syntax or a {ref: name} map -- same gap class as the workspace-binding case above.
+  const file = "pipeline-missing-runafter.yaml";
+  const source = fs.readFileSync(path.join(__dirname, file), "utf8");
+  const parsed = parseTektonDocument(source);
+
+  // From the declaration: must update both $(tasks.build.results...) refs (deploy, audit) and
+  // the runAfter: [build] entry (audit).
+  // "name: build" alone would also match metadata.name ("build-and-deploy-3" starts with "build").
+  const declOffset = source.indexOf("- name: build\n") + 8;
+  const declTarget = resolveRenameTarget(parsed, declOffset);
+  const declEdits = declTarget ? sameDocumentEdits(parsed, declTarget.kind, declTarget.name, "compile") : [];
+  const declResult = applyTextEdits(source, declEdits);
+  let declAfter;
+  try {
+    declAfter = parseTektonDocument(declResult);
+  } catch {
+    declAfter = undefined;
+  }
+  const okFromDecl =
+    declTarget?.kind === "task-alias" &&
+    declTarget.name === "build" &&
+    declEdits.length === 4 && // declaration + 2x $(tasks.build.results...) + 1x runAfter entry
+    declAfter?.symbols.tasks.some((t) => t.name === "compile") &&
+    !declAfter?.symbols.tasks.some((t) => t.name === "build") &&
+    declAfter?.symbols.tasks.find((t) => t.name === "audit")?.runAfter.some((ra) => ra.name === "compile") &&
+    !declAfter?.symbols.tasks.find((t) => t.name === "audit")?.runAfter.some((ra) => ra.name === "build");
+  console.log(`  [${okFromDecl ? "PASS" : "FAIL"}] ${file}: from declaration, "build" -> "compile" (${declEdits.length} edits)`);
+  if (!okFromDecl) {
+    console.log({ declTarget, declEdits });
+    failures++;
+  }
+
+  // From the point of use (the "audit" task's runAfter: [build] entry, not the declaration).
+  const useOffset = source.lastIndexOf("- build") + 2;
+  const useTarget = resolveRenameTarget(parsed, useOffset);
+  const useEdits = useTarget ? sameDocumentEdits(parsed, useTarget.kind, useTarget.name, "compile") : [];
+  const okFromUse = useOffset !== declOffset && useTarget?.kind === "task-alias" && useTarget.name === "build" && useEdits.length === 4;
+  console.log(`  [${okFromUse ? "PASS" : "FAIL"}] ${file}: rename initiated from a runAfter entry (point of use), not just the declaration`);
+  if (!okFromUse) {
+    console.log({ useTarget, useEdits });
+    failures++;
+  }
+}
+
 console.log("\nrename: cross-file result (Task result <-> tasks.X.results.Y):");
 {
   const taskSource = fs.readFileSync(path.join(__dirname, "task-build-image.yaml"), "utf8");

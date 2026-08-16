@@ -51,6 +51,9 @@ export function resolveRenameTarget(parsed: ParsedTektonDoc, offset: number): Re
         return { kind: "workspace", name: wb.workspaceName, range: wb.workspaceNameRange! };
       }
     }
+    for (const ra of t.runAfter) {
+      if (inRange(ra.range, offset)) return { kind: "task-alias", name: ra.name, range: ra.range! };
+    }
   }
   if (symbols.metadataName && TASK_LIKE_KINDS.has(symbols.kind) && inRange(symbols.metadataNameRange, offset)) {
     return { kind: "task-identity", name: symbols.metadataName, range: symbols.metadataNameRange! };
@@ -140,11 +143,11 @@ export interface TextEdit {
 
 /**
  * Every same-document occurrence of a param/workspace/task-alias, ready to
- * rename: the declaration, any `$(...)` reference to it, and — for a
- * workspace specifically — every task's own `workspaces: [{name,
- * workspace}]` binding pointing at it. That binding is a plain YAML field
- * value (`workspace: NAME`), not `$(...)` syntax, so `findParamRefs` alone
- * never sees it.
+ * rename: the declaration, any `$(...)` reference to it, and two plain
+ * (non-`$(...)`) YAML field cases `findParamRefs` alone never sees — for a
+ * workspace, every task's own `workspaces: [{name, workspace}]` binding
+ * pointing at it; for a task alias, every *other* task's `runAfter:
+ * [name, ...]` entry naming it.
  */
 export function sameDocumentEdits(
   parsed: ParsedTektonDoc,
@@ -172,6 +175,14 @@ export function sameDocumentEdits(
         if (wb.workspaceName === name && wb.workspaceNameRange) {
           edits.push({ range: wb.workspaceNameRange, newText: newName });
         }
+      }
+    }
+  }
+
+  if (kind === "task-alias") {
+    for (const t of symbols.tasks) {
+      for (const ra of t.runAfter) {
+        if (ra.name === name && ra.range) edits.push({ range: ra.range, newText: newName });
       }
     }
   }

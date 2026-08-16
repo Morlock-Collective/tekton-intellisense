@@ -51,6 +51,8 @@ export interface TaskSymbol extends NamedSymbol {
   taskRefNameRange?: [number, number];
   /** this task entry's own `workspaces: [{name, workspace}]` bindings, mapping the task's local workspace names to the Pipeline's declared ones */
   workspaceBindings: TaskWorkspaceBinding[];
+  /** this task entry's own `runAfter: [name, ...]` — bare scalar task-alias names, not `$(...)` syntax or a `{ref: name}` map */
+  runAfter: RefName[];
 }
 
 export interface TaskWorkspaceBinding {
@@ -183,6 +185,18 @@ function scalarRefField(map: YAMLMap | undefined, key: string): { name?: string;
   return { name: scalarString(refNode), range: scalarRange(refNode) };
 }
 
+/** Reads a sequence of bare scalar names directly (not nested under a key) — e.g. a task entry's `runAfter: [name, ...]`. */
+function scalarNameList(seq: YAMLSeq | undefined): RefName[] {
+  const out: RefName[] = [];
+  if (!seq) return out;
+  for (const item of seq.items) {
+    if (isScalar(item) && typeof item.value === "string" && item.range) {
+      out.push({ name: item.value, range: [item.range[0], item.range[1]] });
+    }
+  }
+  return out;
+}
+
 /** Reads a sequence of `{ ref: <name> }` entries (EventListener/Trigger's `bindings`) — embedded name/value bindings have no `ref` and are silently skipped, since there's no cross-file identity to resolve for those. */
 function scalarRefList(seq: YAMLSeq | undefined): RefName[] {
   const out: RefName[] = [];
@@ -280,7 +294,8 @@ function taskEntries(seq: YAMLSeq | undefined): TaskSymbol[] {
   forEachNamedItem(seq, (m, name, range) => {
     const taskRef = refNameAndRange(m, "taskRef");
     const workspaceBindings = taskWorkspaceBindings(seqOf(m.get("workspaces", true)));
-    out.push({ name, range, taskRefName: taskRef.name, taskRefNameRange: taskRef.range, workspaceBindings });
+    const runAfter = scalarNameList(seqOf(m.get("runAfter", true)));
+    out.push({ name, range, taskRefName: taskRef.name, taskRefNameRange: taskRef.range, workspaceBindings, runAfter });
   });
   return out;
 }
