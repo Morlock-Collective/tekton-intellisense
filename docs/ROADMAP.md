@@ -122,6 +122,37 @@ the same treatment was extended to the pre-existing `taskRef.name`/
 past the top-level namespace aren't completed — same reason they aren't
 diagnosed as unknown (no declared schema for the incoming webhook payload).
 
+**Edit Task Script** (`scriptEmbed.ts`, `commands/editTaskScript.ts`) — a
+step/sidecar's `script: |` block gets its shebang sniffed to infer a
+language (bash/sh/zsh/dash/ksh, python(2/3), node, ruby/perl/php/lua), then
+the "Tekton: Edit Task Script" command (Command Palette / editor context
+menu, cursor-first with a step/sidecar picker fallback — same pattern as
+`bindParamToEnv`/`addConditional`) pops its dedented content out into a
+real scratch file with the matching extension under the OS temp directory.
+Opened normally as an ordinary editor tab, it gets full native language
+support from whatever extension is installed (Pylance, etc.) — no
+bridging, no headlessly querying another extension's providers. Saving the
+scratch file re-indents its content back into the YAML block (re-resolved
+by the step's own name, not a captured position, since the host document
+may have changed since the scratch file was opened), surfaces the host
+document at that position, and closes the scratch tab.
+
+`$(...)` Tekton refs are masked to same-length placeholders before writing
+the scratch file's *analysis* content, mirroring `helmMask.ts`'s approach
+to `{{ }}` — except for shellscript, where `$(...)` is valid native bash
+command substitution and masking it would replace legitimate syntax with
+something less likely to parse. Masking never touches what's written
+back on save, though — `rawContent` (always unmasked) is round-tripped,
+so a script that still inlines `$(params.X)` keeps working exactly as
+written; a version bridging live IntelliSense directly into the YAML
+editor via a virtual/scratch document queried headlessly was attempted
+first and abandoned — every request needed a language server's first-ever
+look at a brand-new document, which in practice just meant permanently
+empty results, not occasionally slow ones. Reused the same
+shebang-detection/dedent/offset-math groundwork afterward, since that part
+was never what was broken. See Known limitations for the scratch-location
+question that took three attempts to settle (still open for Windows).
+
 ## Notable bugs found and fixed along the way
 
 - Multi-line inserts only indented their first line correctly; the trailing
@@ -184,9 +215,21 @@ diagnosed as unknown (no declared schema for the incoming webhook payload).
 - Interceptor/ClusterInterceptor aren't recognized document kinds — they're
   normally cluster-installed (`github`/`cel`/`slack`/...), not hand-authored
   per chart. An interceptor's `ref.name` is an unvalidated string.
+- "Edit Task Script" scratch files live under `os.tmpdir()`, confirmed to
+  get full IntelliSense on Linux; not yet validated on Windows/macOS. If
+  it turns out not to work cross-platform, the fallback that's already
+  known to work is putting them under
+  `<workspace-folder>/.vscode/tekton-script-edits` instead (tried and
+  confirmed before `os.tmpdir()`, abandoned only because it pollutes the
+  user's project for no benefit once the temp-dir approach also worked).
+- Only literal block scalars (`script: |`) are supported for "Edit Task
+  Script" — folded (`>`) and quoted/plain scripts are left alone, since
+  the dedent math needs consistent per-line indentation to strip.
 
 ## Next up
 
+- [ ] Validate "Edit Task Script" scratch files on Windows/macOS, not just
+      Linux.
 - [ ] Cross-resource check: does every *required* TriggerTemplate param (no
       default) actually get provided by name from at least one of an
       EventListener/Trigger's bound TriggerBindings.

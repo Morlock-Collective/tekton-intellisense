@@ -12,18 +12,14 @@ import { parseTektonDocument } from "../tekton/model";
 import { EmbeddedScriptBlock, findEmbeddedScriptBlocks, LANGUAGE_EXTENSIONS, reindentScriptContent } from "../tekton/scriptEmbed";
 
 /**
- * EXPERIMENTAL: scratch files live under the OS temp directory rather than
- * inside the workspace (`<folder>/.vscode/tekton-script-edits`, tried
- * first) or under `context.globalStorageUri` (tried before that). Neither
- * of those two turned out to be quite right for a reason not fully pinned
- * down: `globalStorageUri` (nested under VS Code's own app-config
- * directory) got syntax highlighting but no real IntelliSense from
- * Pylance, even with the extension installed and confirmed working
- * elsewhere; a loose file saved by hand to somewhere ordinary (home
- * directory / temp) got full IntelliSense with no workspace involved at
- * all. `os.tmpdir()` is the closest match to that ordinary-location case —
- * if this doesn't pan out either, workspace membership goes back on the
- * table as the real requirement, but that hasn't been cleanly proven yet.
+ * Scratch files live under the OS temp directory — confirmed (on Linux;
+ * not yet checked on Windows) to get full IntelliSense with no workspace
+ * involved at all, unlike two earlier attempts: `context.globalStorageUri`
+ * (nested under VS Code's own app-config directory) got syntax
+ * highlighting but no real completions/hover from Pylance even with the
+ * extension installed and working fine elsewhere; workspace membership
+ * (`<folder>/.vscode/tekton-script-edits`) worked but pollutes the user's
+ * project for no benefit once this turned out to work just as well.
  */
 const scratchDir = vscode.Uri.file(path.join(os.tmpdir(), "tekton-intellisense-script-edits"));
 let scratchDirEnsured: Thenable<void> | undefined;
