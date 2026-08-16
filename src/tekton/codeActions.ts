@@ -57,6 +57,11 @@ export class TektonRefCodeActionProvider implements vscode.CodeActionProvider {
     const actions: vscode.CodeAction[] = [];
     const taskParamGroups = new Map<string, TaskParamGroup>();
 
+    // First pass: dispatch every fix that's independent of the others, and group
+    // "add-task-param:" diagnostics by task entry (see TaskParamGroup) without building their
+    // fixes yet -- those come in a second pass below, once each group's full param list is known,
+    // so "add all" can be listed ahead of the individual "add X" fixes it supersedes rather than
+    // wherever its last diagnostic happened to fall in `context.diagnostics`.
     for (const diagnostic of context.diagnostics) {
       if (diagnostic.source !== DIAGNOSTIC_SOURCE) continue;
       const code = typeof diagnostic.code === "string" ? diagnostic.code : undefined;
@@ -70,10 +75,6 @@ export class TektonRefCodeActionProvider implements vscode.CodeActionProvider {
       } else if (code.startsWith("add-task-param:")) {
         const [taskRefName, paramName] = code.slice("add-task-param:".length).split(":");
         if (!taskRefName || !paramName) continue;
-        const bindingFix = this.addTaskParamBindingFix(document, diagnostic, paramName);
-        if (bindingFix) actions.push(bindingFix);
-        const defaultFix = this.addTaskParamDefaultFix(diagnostic, taskRefName, paramName);
-        if (defaultFix) actions.push(defaultFix);
 
         // Diagnostics for the same task entry share the exact same range (its taskRefNameRange),
         // one per missing param -- that's the grouping key, not taskRefName alone, since two
@@ -89,12 +90,22 @@ export class TektonRefCodeActionProvider implements vscode.CodeActionProvider {
       }
     }
 
-    // Only worth offering once a task entry is actually missing more than one param -- with just
-    // one, this would be a redundant duplicate of the per-diagnostic "add X" fix above.
     for (const group of taskParamGroups.values()) {
-      if (group.paramNames.length < 2) continue;
-      const action = this.addAllTaskParamsFix(document, group.diagnostics, group.paramNames);
-      if (action) actions.push(action);
+      // Only worth offering once a task entry is actually missing more than one param -- with
+      // just one, this would be a redundant duplicate of the per-diagnostic "add X" fix below it.
+      const offeringAddAll = group.paramNames.length >= 2;
+      if (offeringAddAll) {
+        const action = this.addAllTaskParamsFix(document, group.diagnostics, group.paramNames);
+        if (action) actions.push(action);
+      }
+      for (let i = 0; i < group.diagnostics.length; i++) {
+        const diagnostic = group.diagnostics[i];
+        const paramName = group.paramNames[i];
+        const bindingFix = this.addTaskParamBindingFix(document, diagnostic, paramName, !offeringAddAll);
+        if (bindingFix) actions.push(bindingFix);
+        const defaultFix = this.addTaskParamDefaultFix(diagnostic, group.taskRefName, paramName);
+        if (defaultFix) actions.push(defaultFix);
+      }
     }
 
     return actions;
@@ -193,9 +204,20 @@ export class TektonRefCodeActionProvider implements vscode.CodeActionProvider {
   /**
    * One of the "missing required param" fixes: adds `paramName` to *this*
    * binding (the Pipeline task entry's or TaskRun's own `params:` list),
-   * with a placeholder value the user still needs to fill in.
+   * with a placeholder value the user still needs to fill in. `isPreferred`
+   * only when there's nothing to prefer it *over* — once
+   * {@link addAllTaskParamsFix} is also on offer (this same task entry is
+   * missing more than one param), that one claims `isPreferred` instead, so
+   * VS Code (which bubbles preferred actions to the top regardless of list
+   * order) surfaces the bulk fix first, not one of several equally-arbitrary
+   * single-param ones.
    */
-  private addTaskParamBindingFix(document: vscode.TextDocument, diagnostic: vscode.Diagnostic, paramName: string): vscode.CodeAction | undefined {
+  private addTaskParamBindingFix(
+    document: vscode.TextDocument,
+    diagnostic: vscode.Diagnostic,
+    paramName: string,
+    isPreferred: boolean
+  ): vscode.CodeAction | undefined {
     const offset = document.offsetAt(diagnostic.range.start);
     const parsed = findResourceAt(parseTektonFile(document.getText()), offset);
     if (!parsed) return undefined;
@@ -206,7 +228,7 @@ export class TektonRefCodeActionProvider implements vscode.CodeActionProvider {
     const action = new vscode.CodeAction(`Add "${paramName}" to this task's params`, vscode.CodeActionKind.QuickFix);
     action.edit = this.insertParamBindingsEdit(document, parsed, owner, [paramName]);
     action.diagnostics = [diagnostic];
-    action.isPreferred = true;
+    action.isPreferred = isPreferred;
     return action;
   }
 
@@ -215,7 +237,9 @@ export class TektonRefCodeActionProvider implements vscode.CodeActionProvider {
    * missing required param to this binding in one edit, rather than one
    * quick fix per param — offered alongside the individual fixes whenever a
    * task entry is missing more than one, since fixing them one at a time is
-   * the common case's slow path, not the interesting one.
+   * the common case's slow path, not the interesting one. See that method's
+   * doc comment for why this one (not it) gets `isPreferred` whenever both
+   * are on offer.
    */
   private addAllTaskParamsFix(document: vscode.TextDocument, diagnostics: vscode.Diagnostic[], paramNames: string[]): vscode.CodeAction | undefined {
     const offset = document.offsetAt(diagnostics[0].range.start);
@@ -228,6 +252,7 @@ export class TektonRefCodeActionProvider implements vscode.CodeActionProvider {
     const action = new vscode.CodeAction(`Add all missing parameters (${paramNames.join(", ")})`, vscode.CodeActionKind.QuickFix);
     action.edit = this.insertParamBindingsEdit(document, parsed, owner, paramNames);
     action.diagnostics = diagnostics;
+    action.isPreferred = true;
     return action;
   }
 

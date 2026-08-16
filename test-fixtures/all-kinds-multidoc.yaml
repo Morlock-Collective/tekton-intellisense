@@ -43,6 +43,8 @@ spec:
   params:
     - name: region
       type: string
+    - name: country
+      type: string
   steps:
     - name: audit
       image: alpine
