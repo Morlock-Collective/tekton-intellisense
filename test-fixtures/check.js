@@ -462,6 +462,60 @@ spec:
   }
 }
 
+console.log("\nrename: step ref (StepAction identity), same-doc and cross-file:");
+{
+  // A step's `ref: { name: X }` (pointing at a shared StepAction) shares the same identity
+  // namespace as taskRef.name -- TASK_LIKE_KINDS includes StepAction alongside Task/ClusterTask.
+  const taskSource = `apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: build
+spec:
+  steps:
+    - name: lint
+      ref:
+        name: shared-lint
+    - name: compile
+      image: golang
+`;
+  const taskParsed = parseTektonDocument(taskSource);
+
+  // Rename initiated from the point of use (the step's ref.name), not a declaration.
+  const useOffset = taskSource.indexOf("shared-lint") + 3;
+  const useTarget = resolveRenameTarget(taskParsed, useOffset);
+  const sameDocEdits = useTarget ? taskRefIdentityEdits(taskParsed, useTarget.name, "shared-linter") : [];
+  const okFromUse = useTarget?.kind === "task-identity" && useTarget.name === "shared-lint" && sameDocEdits.length === 1;
+  console.log(`  [${okFromUse ? "PASS" : "FAIL"}] Task's step ref.name resolves as a rename target and produces a same-doc edit`);
+  if (!okFromUse) {
+    console.log({ useTarget, sameDocEdits });
+    failures++;
+  }
+
+  // Rename initiated from the StepAction's own declaration must find the Task's step ref cross-file.
+  const stepActionSource = `apiVersion: tekton.dev/v1
+kind: StepAction
+metadata:
+  name: shared-lint
+spec:
+  image: alpine
+  script: echo lint
+`;
+  const stepActionParsed = parseTektonDocument(stepActionSource);
+  const declOffset = stepActionSource.indexOf("shared-lint") + 3;
+  const declTarget = resolveRenameTarget(stepActionParsed, declOffset);
+  const crossFileEdits = taskRefIdentityEdits(taskParsed, "shared-lint", "shared-linter");
+  const okCrossFile =
+    declTarget?.kind === "task-identity" &&
+    declTarget.name === "shared-lint" &&
+    crossFileEdits.length === 1 &&
+    applyTextEdits(taskSource, crossFileEdits).includes("shared-linter");
+  console.log(`  [${okCrossFile ? "PASS" : "FAIL"}] StepAction declaration resolves as a rename target; cross-file scan finds the Task's step ref`);
+  if (!okCrossFile) {
+    console.log({ declTarget, crossFileEdits });
+    failures++;
+  }
+}
+
 console.log("\nrename: duplicate-name ambiguity trap detection:");
 {
   // Two different Task files legitimately declaring the same metadata.name

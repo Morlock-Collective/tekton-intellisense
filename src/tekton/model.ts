@@ -708,3 +708,21 @@ export function stepAndSidecarEntryMaps(parsed: ParsedTektonDoc): YAMLMap[] {
 export function findEnclosingStepEntry(parsed: ParsedTektonDoc, offset: number): YAMLMap | undefined {
   return stepAndSidecarEntryMaps(parsed).find((m) => m.range && offset >= m.range[0] && offset <= m.range[2]);
 }
+
+/**
+ * Every step's `ref: { name: X }` pointing at a shared `StepAction`, across
+ * every step {@link stepAndSidecarEntryMaps} finds — a Step's own local
+ * `name:` isn't tracked here, only this cross-resource reference. A
+ * StepAction shares its identity namespace with Task/ClusterTask (see
+ * `TASK_LIKE_KINDS`, and `workspaceIndex.ts`'s "task" group), so this is
+ * the same kind of reference as a Pipeline task entry's `taskRef.name`,
+ * just from inside a step instead.
+ */
+export function stepActionRefs(parsed: ParsedTektonDoc): RefName[] {
+  const out: RefName[] = [];
+  for (const step of stepAndSidecarEntryMaps(parsed)) {
+    const ref = refNameAndRange(step, "ref");
+    if (ref.name && ref.range) out.push({ name: ref.name, range: ref.range });
+  }
+  return out;
+}

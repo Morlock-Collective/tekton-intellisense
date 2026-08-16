@@ -1,4 +1,4 @@
-import { ParsedTektonDoc, TaskSymbol, TASK_LIKE_KINDS, TRIGGER_BINDING_LIKE_KINDS } from "./model";
+import { ParsedTektonDoc, stepActionRefs, TaskSymbol, TASK_LIKE_KINDS, TRIGGER_BINDING_LIKE_KINDS } from "./model";
 import { findParamRefs } from "./paramRefs";
 
 /**
@@ -66,6 +66,9 @@ export function resolveRenameTarget(parsed: ParsedTektonDoc, offset: number): Re
   }
   if (symbols.taskRefName && inRange(symbols.taskRefNameRange, offset)) {
     return { kind: "task-identity", name: symbols.taskRefName, range: symbols.taskRefNameRange! };
+  }
+  for (const ref of stepActionRefs(parsed)) {
+    if (inRange(ref.range, offset)) return { kind: "task-identity", name: ref.name, range: ref.range! };
   }
 
   for (const trigger of symbols.triggers) {
@@ -219,10 +222,12 @@ export function taskResultReferenceEdits(parsed: ParsedTektonDoc, taskAlias: str
 }
 
 /**
- * Every `taskRef: { name: <name> }` in `parsed` pointing at one specific
- * Task identity — both a Pipeline's per-task-entry `taskRef` and a
- * TaskRun's own top-level `spec.taskRef`, which are structurally different
- * fields but the same kind of reference.
+ * Every `taskRef: { name: <name> }` and step `ref: { name: <name> }` in
+ * `parsed` pointing at one specific Task/StepAction identity — a
+ * Pipeline's per-task-entry `taskRef`, a TaskRun's own top-level
+ * `spec.taskRef`, and any step's own `ref` (pointing at a shared
+ * StepAction), which are structurally different fields but the same kind
+ * of reference (see {@link stepActionRefs}).
  */
 export function taskRefIdentityEdits(parsed: ParsedTektonDoc, name: string, newName: string): TextEdit[] {
   const edits: TextEdit[] = [];
@@ -233,6 +238,9 @@ export function taskRefIdentityEdits(parsed: ParsedTektonDoc, name: string, newN
   }
   if (parsed.symbols.kind === "TaskRun" && parsed.symbols.taskRefName === name && parsed.symbols.taskRefNameRange) {
     edits.push({ range: parsed.symbols.taskRefNameRange, newText: newName });
+  }
+  for (const ref of stepActionRefs(parsed)) {
+    if (ref.name === name && ref.range) edits.push({ range: ref.range, newText: newName });
   }
   return edits;
 }

@@ -167,7 +167,11 @@ export class TektonRenameProvider implements vscode.RenameProvider {
           (idx, n) => idx.lookupAllTaskRecords(n),
           "Task/ClusterTask/StepAction",
           "Task",
-          [{ kinds: ["Pipeline", "TaskRun"], findEdits: taskRefIdentityEdits }]
+          // Task/ClusterTask included alongside Pipeline/TaskRun because a step's own `ref:`
+          // (pointing at a shared StepAction) can appear inside any of them, not just inline
+          // taskSpecs -- StepAction itself is omitted, since a StepAction resource has no
+          // steps of its own to search.
+          [{ kinds: ["Pipeline", "TaskRun", "Task", "ClusterTask"], findEdits: taskRefIdentityEdits }]
         );
 
       case "pipeline-identity":
