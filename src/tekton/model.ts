@@ -88,6 +88,8 @@ export interface TriggerBindingParamSymbol extends NamedSymbol {
 /** EventListener.spec.triggers[] entry. Parallel to TaskSymbol: a named entry that points at other resources by name. */
 export interface TriggerEntrySymbol extends NamedSymbol {
   bindingRefs: RefName[];
+  /** names from bindings[] entries that provide a value inline (`{name, value}`) instead of via `ref` — no separate resource to resolve, but still a param the bound TriggerTemplate can consider satisfied */
+  inlineParamNames: string[];
   templateRefName?: string;
   templateRefNameRange?: [number, number];
   /** points at a standalone Trigger instead of inline bindings+template, if set */
@@ -116,6 +118,8 @@ export interface TektonSymbols {
   templateRefNameRange?: [number, number];
   /** a standalone Trigger's own spec.bindings[].ref entries */
   bindingRefs: RefName[];
+  /** a standalone Trigger's own spec.bindings[] entries that provide a value inline instead of via ref — see TriggerEntrySymbol.inlineParamNames */
+  inlineParamNames: string[];
   params: ParamSymbol[];
   workspaces: WorkspaceSymbol[];
   results: ResultSymbol[];
@@ -290,6 +294,19 @@ function triggerBindingParamEntries(seq: YAMLSeq | undefined): TriggerBindingPar
   return out;
 }
 
+/** Names from a bindings[] sequence's inline entries (`{name, value}`, no `ref`) — the shorthand form that provides a param directly without a separate TriggerBinding resource. */
+function inlineBindingParamNames(seq: YAMLSeq | undefined): string[] {
+  const out: string[] = [];
+  if (!seq) return out;
+  for (const item of seq.items) {
+    const m = mapOf(item);
+    if (!m || m.get("ref", true) !== undefined) continue;
+    const name = scalarString(m.get("name", true));
+    if (name) out.push(name);
+  }
+  return out;
+}
+
 function interceptorNames(seq: YAMLSeq | undefined): string[] {
   const out: string[] = [];
   if (!seq) return out;
@@ -305,10 +322,12 @@ function triggerEntries(seq: YAMLSeq | undefined): TriggerEntrySymbol[] {
   forEachNamedItem(seq, (m, name, range) => {
     const templateRef = scalarRefField(m, "template");
     const triggerRefNode = m.get("triggerRef", true);
+    const bindingsSeq = seqOf(m.get("bindings", true));
     out.push({
       name,
       range,
-      bindingRefs: scalarRefList(seqOf(m.get("bindings", true))),
+      bindingRefs: scalarRefList(bindingsSeq),
+      inlineParamNames: inlineBindingParamNames(bindingsSeq),
       templateRefName: templateRef.name,
       templateRefNameRange: templateRef.range,
       triggerRefName: scalarString(triggerRefNode),
@@ -363,7 +382,9 @@ export function parseTektonDocument(source: string): ParsedTektonDoc | undefined
   const pipelineRef = kind === "PipelineRun" ? refNameAndRange(spec, "pipelineRef") : undefined;
   const ownTaskRef = kind === "TaskRun" ? refNameAndRange(spec, "taskRef") : undefined;
   const ownTemplateRef = kind === "Trigger" ? scalarRefField(spec, "template") : undefined;
-  const ownBindingRefs = kind === "Trigger" ? scalarRefList(seqOf(spec?.get("bindings", true))) : [];
+  const ownBindingsSeq = kind === "Trigger" ? seqOf(spec?.get("bindings", true)) : undefined;
+  const ownBindingRefs = kind === "Trigger" ? scalarRefList(ownBindingsSeq) : [];
+  const ownInlineParamNames = kind === "Trigger" ? inlineBindingParamNames(ownBindingsSeq) : [];
 
   const params = paramEntries(seqOf(spec?.get("params", true)));
   const workspaces = workspaceEntries(seqOf(spec?.get("workspaces", true)));
@@ -396,6 +417,7 @@ export function parseTektonDocument(source: string): ParsedTektonDoc | undefined
       templateRefName: ownTemplateRef?.name,
       templateRefNameRange: ownTemplateRef?.range,
       bindingRefs: ownBindingRefs,
+      inlineParamNames: ownInlineParamNames,
       params,
       workspaces,
       results,

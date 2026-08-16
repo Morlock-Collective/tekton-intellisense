@@ -1,0 +1,18 @@
+apiVersion: triggers.tekton.dev/v1beta1
+kind: EventListener
+metadata:
+  name: incomplete-listener
+spec:
+  triggers:
+    - name: incomplete
+      bindings:
+        - ref: incomplete-binding
+      template:
+        ref: build-template
+    - name: inline-satisfied
+      bindings:
+        - ref: incomplete-binding
+        - name: gitrepositoryurl
+          value: https://example.com/repo.git
+      template:
+        ref: build-template

@@ -187,6 +187,71 @@ function checkTriggerRefs(document: vscode.TextDocument, symbols: TektonSymbols,
   return diagnostics;
 }
 
+/**
+ * Flags an EventListener trigger entry's (or standalone Trigger's own)
+ * bound TriggerTemplate when it declares a required param (no `default`)
+ * that none of the entry's bound TriggerBindings — inline or `ref`-based —
+ * actually provide by name. Unlike a typo'd reference, Tekton doesn't
+ * reject this until the resourcetemplate is instantiated at runtime, so
+ * it's easy to only discover by watching a TriggerRun fail.
+ *
+ * Skipped entirely (rather than guessed at) when the template or any bound
+ * TriggerBinding doesn't resolve at all — {@link checkTriggerRefs} already
+ * flags that separately, and computing a "missing params" list against
+ * content we don't actually have would just be noise on top of it. Also a
+ * no-op for an EventListener entry that delegates via `triggerRef` instead
+ * of inline `bindings`/`template` — `bindingRefs`/`templateRefName` are
+ * naturally empty in that shape, and the standalone Trigger it points at
+ * gets this same check directly in its own document.
+ */
+function checkTriggerTemplateParamWiring(
+  document: vscode.TextDocument,
+  symbols: TektonSymbols,
+  workspaceIndex: TektonWorkspaceIndex
+): vscode.Diagnostic[] {
+  const diagnostics: vscode.Diagnostic[] = [];
+
+  const checkWiring = (
+    bindingRefs: RefName[],
+    inlineParamNames: string[],
+    templateRefName: string | undefined,
+    templateRefNameRange: [number, number] | undefined
+  ) => {
+    if (!templateRefName || !templateRefNameRange) return;
+    const template = workspaceIndex.lookupTriggerTemplateRecord(templateRefName);
+    if (!template) return;
+
+    const provided = new Set(inlineParamNames);
+    for (const ref of bindingRefs) {
+      const binding = workspaceIndex.lookupTriggerBindingRecord(ref.name);
+      if (!binding) return; // an unresolved binding ref means we can't know the true provided set
+      for (const p of binding.parsed.symbols.bindingParams) provided.add(p.name);
+    }
+
+    const missing = template.parsed.symbols.params.filter((p) => p.default === undefined && !provided.has(p.name));
+    if (missing.length === 0) return;
+
+    const names = missing.map((p) => `"${p.name}"`).join(", ");
+    const diagnostic = new vscode.Diagnostic(
+      new vscode.Range(offsetToPosition(document, templateRefNameRange[0]), offsetToPosition(document, templateRefNameRange[1])),
+      `TriggerTemplate "${templateRefName}" requires param${missing.length > 1 ? "s" : ""} ${names} with no default, but the bound TriggerBinding(s) don't provide ${missing.length > 1 ? "them" : "it"}.`,
+      vscode.DiagnosticSeverity.Warning
+    );
+    diagnostic.source = DIAGNOSTIC_SOURCE;
+    diagnostics.push(diagnostic);
+  };
+
+  if (symbols.kind === "EventListener") {
+    for (const trigger of symbols.triggers) {
+      checkWiring(trigger.bindingRefs, trigger.inlineParamNames, trigger.templateRefName, trigger.templateRefNameRange);
+    }
+  } else if (symbols.kind === "Trigger") {
+    checkWiring(symbols.bindingRefs, symbols.inlineParamNames, symbols.templateRefName, symbols.templateRefNameRange);
+  }
+
+  return diagnostics;
+}
+
 function checkRef(
   ref: ParamRef,
   symbols: TektonSymbols
@@ -286,6 +351,7 @@ export function computeDiagnostics(document: vscode.TextDocument, workspaceIndex
     ...checkTaskWorkspaceBindings(document, parsed.symbols),
     ...checkMissingRunAfter(document, parsed),
     ...checkTriggerRefs(document, parsed.symbols, workspaceIndex),
+    ...checkTriggerTemplateParamWiring(document, parsed.symbols, workspaceIndex),
   ];
 
   const refs = findParamRefs(parsed.text);

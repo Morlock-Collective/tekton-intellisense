@@ -1029,6 +1029,66 @@ console.log("\nEventListener/Trigger ref validation (simulated workspace index):
   }
 }
 
+// Mirrors checkTriggerTemplateParamWiring in diagnostics.ts (same vscode-free
+// constraint as the ref-validation block above) -- builds the same "does the
+// bound TriggerBinding set actually cover every required param" check
+// against a small in-memory index of the trigger fixtures.
+console.log("\nTriggerTemplate param-wiring check (simulated workspace index):");
+{
+  function buildRecordIndex(files) {
+    const byName = new Map();
+    for (const file of files) {
+      const parsed = parseTektonDocument(fs.readFileSync(path.join(__dirname, file), "utf8"));
+      if (parsed.symbols.metadataName) byName.set(parsed.symbols.metadataName, parsed);
+    }
+    return byName;
+  }
+  const templates = buildRecordIndex(["triggertemplate.yaml"]);
+  const bindings = buildRecordIndex(["triggerbinding.yaml", "triggerbinding-incomplete.yaml", "clustertriggerbinding.yaml"]);
+
+  // Returns the list of missing required param names, or undefined if the template/a binding
+  // doesn't resolve at all (not this check's job -- see checkTriggerRefs above).
+  function missingParams(bindingRefs, inlineParamNames, templateRefName) {
+    const template = templateRefName && templates.get(templateRefName);
+    if (!template) return undefined;
+    const provided = new Set(inlineParamNames);
+    for (const ref of bindingRefs || []) {
+      const binding = bindings.get(ref.name);
+      if (!binding) return undefined;
+      for (const p of binding.symbols.bindingParams) provided.add(p.name);
+    }
+    return template.symbols.params.filter((p) => p.default === undefined && !provided.has(p.name)).map((p) => p.name);
+  }
+
+  const elParsed = parseTektonDocument(fs.readFileSync(path.join(__dirname, "eventlistener-missing-param.yaml"), "utf8"));
+  const byTriggerName = Object.fromEntries(
+    elParsed.symbols.triggers.map((t) => [t.name, missingParams(t.bindingRefs, t.inlineParamNames, t.templateRefName)])
+  );
+
+  const okMissing = JSON.stringify(byTriggerName.incomplete) === JSON.stringify(["gitrepositoryurl"]);
+  console.log(
+    `  [${okMissing ? "PASS" : "FAIL"}] "incomplete" trigger: flags missing required param "gitrepositoryurl" (${JSON.stringify(byTriggerName.incomplete)})`
+  );
+  if (!okMissing) failures++;
+
+  const okInline = JSON.stringify(byTriggerName["inline-satisfied"]) === JSON.stringify([]);
+  console.log(
+    `  [${okInline ? "PASS" : "FAIL"}] "inline-satisfied" trigger: inline {name,value} binding entry covers the otherwise-missing param (${JSON.stringify(byTriggerName["inline-satisfied"])})`
+  );
+  if (!okInline) failures++;
+
+  const crossfileParsed = parseTektonDocument(fs.readFileSync(path.join(__dirname, "eventlistener-crossfile.yaml"), "utf8"));
+  const crossfileMissing = crossfileParsed.symbols.triggers.map((t) => missingParams(t.bindingRefs, t.inlineParamNames, t.templateRefName));
+  const okCrossfile = crossfileMissing.every((m) => m === undefined || m.length === 0);
+  console.log(`  [${okCrossfile ? "PASS" : "FAIL"}] eventlistener-crossfile.yaml: fully-bound trigger reports no missing params (${JSON.stringify(crossfileMissing)})`);
+  if (!okCrossfile) failures++;
+
+  const unresolvedMissing = missingParams([{ name: "no-such-binding" }], [], "build-template");
+  const okUnresolved = unresolvedMissing === undefined;
+  console.log(`  [${okUnresolved ? "PASS" : "FAIL"}] unresolved binding ref -> skipped (undefined), not a false "missing" report`);
+  if (!okUnresolved) failures++;
+}
+
 console.log("\nrename: cross-file TriggerTemplate identity (template.ref, EventListener + standalone Trigger):");
 {
   const elSource = fs.readFileSync(path.join(__dirname, "eventlistener-crossfile.yaml"), "utf8");

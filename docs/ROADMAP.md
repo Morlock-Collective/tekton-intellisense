@@ -153,6 +153,21 @@ shebang-detection/dedent/offset-math groundwork afterward, since that part
 was never what was broken. See Known limitations for the scratch-location
 question that took three attempts to settle (still open for Windows).
 
+**TriggerTemplate param-wiring check** (`diagnostics.ts`) — flags an
+EventListener trigger entry (or standalone Trigger) whose bound
+TriggerTemplate declares a required param (no `default`) that none of its
+bound TriggerBindings actually provide by name. Unlike a typo'd reference,
+Tekton doesn't reject this until the resourcetemplate is instantiated at
+runtime, so it's otherwise easy to only discover by watching a TriggerRun
+fail. Accounts for `bindings[]` entries that provide a value inline
+(`{name, value}`, no `ref:`) as well as `ref`-based ones — a real, fairly
+common shorthand that `model.ts` previously only tracked for `ref`-based
+entries (rename/hover/definition legitimately don't need the inline form,
+since there's no separate resource to navigate to, but this check does
+need to count what they provide). Skipped entirely, not guessed at, when
+the template or any bound TriggerBinding doesn't resolve at all —
+`checkTriggerRefs` already flags that separately.
+
 ## Notable bugs found and fixed along the way
 
 - Multi-line inserts only indented their first line correctly; the trailing
@@ -230,9 +245,6 @@ question that took three attempts to settle (still open for Windows).
 
 - [ ] Validate "Edit Task Script" scratch files on Windows/macOS, not just
       Linux.
-- [ ] Cross-resource check: does every *required* TriggerTemplate param (no
-      default) actually get provided by name from at least one of an
-      EventListener/Trigger's bound TriggerBindings.
 
 Publishing to the VS Code Marketplace / Open VSX is being done manually by
 the maintainer once a release is judged stable — not tracked here.
