@@ -642,6 +642,77 @@ console.log("\nmulti-document YAML: every `---`-separated resource in a file is 
   }
 }
 
+console.log("\nmulti-document YAML: every recognized TektonKind, one file (all-kinds-multidoc.yaml):");
+{
+  const source = fs.readFileSync(path.join(__dirname, "all-kinds-multidoc.yaml"), "utf8");
+  const docs = parseTektonFile(source);
+
+  const expected = {
+    "mdk-stepaction": "StepAction",
+    "mdk-task": "Task",
+    "mdk-clustertask": "ClusterTask",
+    "mdk-pipeline": "Pipeline",
+    "mdk-pipelinerun": "PipelineRun",
+    "mdk-taskrun": "TaskRun",
+    "mdk-template": "TriggerTemplate",
+    "mdk-binding": "TriggerBinding",
+    "mdk-clusterbinding": "ClusterTriggerBinding",
+    "mdk-trigger": "Trigger",
+    "mdk-listener": "EventListener",
+  };
+  const byName = new Map(docs.map((d) => [d.symbols.metadataName, d]));
+  const allKindsSeen =
+    docs.length === Object.keys(expected).length &&
+    Object.entries(expected).every(([name, kind]) => byName.get(name)?.symbols.kind === kind);
+
+  const task = byName.get("mdk-task");
+  const pipeline = byName.get("mdk-pipeline");
+  const taskRun = byName.get("mdk-taskrun");
+
+  // A cross-document identity reference chain, three different reference shapes all pointing
+  // cross-document at "mdk-task" within this one file: a step's own `ref`, a Pipeline task
+  // entry's `taskRef`, and a TaskRun's own `taskRef`.
+  const stepRefEdits = taskRefIdentityEdits(task, "mdk-stepaction", "mdk-stepaction-renamed");
+  const pipelineTaskRefEdits = taskRefIdentityEdits(pipeline, "mdk-task", "mdk-task-renamed");
+  const taskRunRefEdits = taskRefIdentityEdits(taskRun, "mdk-task", "mdk-task-renamed");
+  const taskChainOk = stepRefEdits.length === 1 && pipelineTaskRefEdits.length === 1 && taskRunRefEdits.length === 1;
+
+  // A PipelineRun's pipelineRef and a Trigger/EventListener's bindings[].ref + template.ref +
+  // triggerRef, every one of them a same-file cross-document reference.
+  const pipelineRunEdits = pipelineRefIdentityEdits(byName.get("mdk-pipelinerun"), "mdk-pipeline", "mdk-pipeline-renamed");
+  const triggerBindingEdits = bindingRefIdentityEdits(byName.get("mdk-trigger"), "mdk-binding", "mdk-binding-renamed");
+  const triggerTemplateEdits = templateRefIdentityEdits(byName.get("mdk-trigger"), "mdk-template", "mdk-template-renamed");
+  const listenerTriggerEdits = triggerRefIdentityEdits(byName.get("mdk-listener"), "mdk-trigger", "mdk-trigger-renamed");
+  const listenerBindingEdits = bindingRefIdentityEdits(byName.get("mdk-listener"), "mdk-clusterbinding", "mdk-clusterbinding-renamed");
+  const listenerTemplateEdits = templateRefIdentityEdits(byName.get("mdk-listener"), "mdk-template", "mdk-template-renamed");
+  const triggerChainOk =
+    pipelineRunEdits.length === 1 &&
+    triggerBindingEdits.length === 1 &&
+    triggerTemplateEdits.length === 1 &&
+    listenerTriggerEdits.length === 1 &&
+    listenerBindingEdits.length === 1 &&
+    listenerTemplateEdits.length === 1;
+
+  const ok = allKindsSeen && taskChainOk && triggerChainOk;
+  console.log(`  [${ok ? "PASS" : "FAIL"}] all 11 kinds recognized(${allKindsSeen}), Task/StepAction ref chain(${taskChainOk}), Pipeline/Trigger ref chain(${triggerChainOk})`);
+  if (!ok) {
+    console.log({
+      count: docs.length,
+      kinds: docs.map((d) => `${d.symbols.metadataName}:${d.symbols.kind}`),
+      stepRefEdits,
+      pipelineTaskRefEdits,
+      taskRunRefEdits,
+      pipelineRunEdits,
+      triggerBindingEdits,
+      triggerTemplateEdits,
+      listenerTriggerEdits,
+      listenerBindingEdits,
+      listenerTemplateEdits,
+    });
+    failures++;
+  }
+}
+
 console.log("\nrename: duplicate-name ambiguity trap detection:");
 {
   // Two different Task files legitimately declaring the same metadata.name

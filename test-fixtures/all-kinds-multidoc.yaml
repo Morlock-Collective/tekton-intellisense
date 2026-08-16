@@ -1,0 +1,161 @@
+# Every recognized TektonKind bundled into a single multi-document file (a
+# real kubectl-apply/kustomize-build pattern), cross-referencing each other
+# across document boundaries. Names are prefixed "mdk-" (multi-doc-kinds)
+# and don't reuse any name from another fixture, so this file's own
+# same-name-across-files ambiguity handling stays clean when tested
+# alongside the rest of test-fixtures/.
+apiVersion: tekton.dev/v1
+kind: StepAction
+metadata:
+  name: mdk-stepaction
+spec:
+  image: alpine
+  script: |
+    #!/usr/bin/env sh
+    echo "linting..."
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: mdk-task
+spec:
+  params:
+    - name: greeting
+      type: string
+      default: hello
+  results:
+    - name: digest
+      type: string
+  steps:
+    - name: lint
+      ref:
+        name: mdk-stepaction
+    - name: build
+      image: golang
+      script: go build ./...
+---
+apiVersion: tekton.dev/v1
+kind: ClusterTask
+metadata:
+  name: mdk-clustertask
+spec:
+  params:
+    - name: region
+      type: string
+  steps:
+    - name: audit
+      image: alpine
+      script: echo audit
+---
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: mdk-pipeline
+spec:
+  params:
+    - name: greeting
+      type: string
+  workspaces:
+    - name: mdk-workspace
+  tasks:
+    - name: build
+      taskRef:
+        name: mdk-task
+      workspaces:
+        - name: source
+          workspace: mdk-workspace
+      params:
+        - name: greeting
+          value: $(params.greeting)
+  finally:
+    - name: audit
+      taskRef:
+        name: mdk-clustertask
+      runAfter:
+        - build
+---
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  name: mdk-pipelinerun
+spec:
+  pipelineRef:
+    name: mdk-pipeline
+  params:
+    - name: greeting
+      value: hi
+  workspaces:
+    - name: mdk-workspace
+      emptyDir: {}
+---
+apiVersion: tekton.dev/v1
+kind: TaskRun
+metadata:
+  name: mdk-taskrun
+spec:
+  taskRef:
+    name: mdk-task
+  params:
+    - name: greeting
+      value: hi
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerTemplate
+metadata:
+  name: mdk-template
+spec:
+  params:
+    - name: gitrevision
+      description: revision to build
+  resourcetemplates:
+    - apiVersion: tekton.dev/v1
+      kind: PipelineRun
+      spec:
+        pipelineRef:
+          name: mdk-pipeline
+        params:
+          - name: greeting
+            value: $(tt.params.gitrevision)
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerBinding
+metadata:
+  name: mdk-binding
+spec:
+  params:
+    - name: gitrevision
+      value: $(body.head_commit.id)
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: ClusterTriggerBinding
+metadata:
+  name: mdk-clusterbinding
+spec:
+  params:
+    - name: gitrevision
+      value: $(body.head_commit.id)
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: Trigger
+metadata:
+  name: mdk-trigger
+spec:
+  bindings:
+    - ref: mdk-binding
+  template:
+    ref: mdk-template
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: EventListener
+metadata:
+  name: mdk-listener
+spec:
+  triggers:
+    - name: via-standalone-trigger
+      triggerRef: mdk-trigger
+    - name: via-inline-binding-and-template
+      bindings:
+        - ref: mdk-binding
+        - ref: mdk-clusterbinding
+      template:
+        ref: mdk-template
