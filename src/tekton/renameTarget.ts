@@ -122,7 +122,10 @@ export function resolveRenameTarget(parsed: ParsedTektonDoc, offset: number): Re
   for (const ref of paramRefsIn(parsed)) {
     if (offset < ref.start || offset > ref.end) continue;
 
-    if (ref.kind === "param" && ref.name && ref.nameStart !== undefined && ref.nameEnd !== undefined) {
+    // "tt-param" is $(tt.params.X) -- a TriggerTemplate's own resourcetemplates referring back to
+    // its own declared params, the same relationship "param" ($(params.X)) has elsewhere. Same
+    // declaration list (symbols.params), just a different reference syntax.
+    if ((ref.kind === "param" || ref.kind === "tt-param") && ref.name && ref.nameStart !== undefined && ref.nameEnd !== undefined) {
       return { kind: "param", name: ref.name, range: [ref.nameStart, ref.nameEnd] };
     }
     if (ref.kind === "workspace" && ref.name && ref.nameStart !== undefined && ref.nameEnd !== undefined) {
@@ -188,7 +191,11 @@ export function sameDocumentEdits(
 
   const refKind = kind === "task-alias" ? "task-result" : kind;
   for (const ref of paramRefsIn(parsed)) {
-    if (ref.kind !== refKind || ref.name !== name) continue;
+    // "tt-param" ($(tt.params.X)) is a TriggerTemplate's own alternate syntax for referring back
+    // to its own declared params -- same declaration list as "param", just not the same ParamRef
+    // kind findParamRefs classifies it as.
+    const matches = ref.kind === refKind || (kind === "param" && ref.kind === "tt-param");
+    if (!matches || ref.name !== name) continue;
     if (ref.nameStart === undefined || ref.nameEnd === undefined) continue;
     edits.push({ range: [ref.nameStart, ref.nameEnd], newText: newName });
   }

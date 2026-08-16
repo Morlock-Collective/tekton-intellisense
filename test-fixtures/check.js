@@ -713,6 +713,38 @@ console.log("\nmulti-document YAML: every recognized TektonKind, one file (all-k
   }
 }
 
+console.log("\nrename: TriggerTemplate's own param, $(tt.params.X) references included:");
+{
+  // $(tt.params.X) is a distinct ParamRef kind ("tt-param") from $(params.X) ("param"), even
+  // though both refer to the same spec.params declaration list -- sameDocumentEdits/
+  // resolveRenameTarget need to treat them as the same rename target, not just hover/diagnostics.
+  const source = fs.readFileSync(path.join(__dirname, "all-kinds-multidoc.yaml"), "utf8");
+  const template = parseTektonFile(source).find((d) => d.symbols.metadataName === "mdk-template");
+
+  const declOffset = source.indexOf("name: gitrevision") + "name: ".length;
+  const declTarget = resolveRenameTarget(template, declOffset);
+
+  const refOffset = source.indexOf("$(tt.params.gitrevision)") + "$(tt.params.".length;
+  const refTarget = resolveRenameTarget(template, refOffset);
+
+  const edits = sameDocumentEdits(template, "param", "gitrevision", "revision");
+  const applied = applyTextEdits(source, edits);
+  const renamedOk = applied.includes("name: revision") && applied.includes("$(tt.params.revision)");
+
+  const ok =
+    declTarget?.kind === "param" &&
+    declTarget.name === "gitrevision" &&
+    refTarget?.kind === "param" &&
+    refTarget.name === "gitrevision" &&
+    edits.length === 2 &&
+    renamedOk;
+  console.log(`  [${ok ? "PASS" : "FAIL"}] declaration(${declTarget?.kind}) and $(tt.params.X) ref(${refTarget?.kind}) resolve to the same target, rename updates both (${edits.length} edit(s))`);
+  if (!ok) {
+    console.log({ declTarget, refTarget, edits, applied });
+    failures++;
+  }
+}
+
 console.log("\ntask-param binding: hover/go-to-definition/diagnostic all resolve against the referenced Task's declared param:");
 {
   // hover.ts/definitions.ts/diagnostics.ts each need real vscode classes (vscode.Hover,
