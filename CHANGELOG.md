@@ -4,6 +4,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-17
+
 ### Added
 - Diagnostic for a Pipeline task entry's (or TaskRun's) taskRef when the referenced Task requires a param (no default) that isn't provided
 - Quick fixes for that diagnostic: add the missing param binding, add a default value to the Task's own declaration instead, or (when more than one is missing) add all of them at once
