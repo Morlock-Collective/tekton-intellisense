@@ -14,7 +14,7 @@ import { bindParamToEnvCommand } from "./commands/bindParamToEnv";
 import { addTaskCommand } from "./commands/addTask";
 import { addConditionalCommand } from "./commands/addConditional";
 import { addParameterCommand } from "./commands/addParameter";
-import { disposeEditTaskScript, editTaskScriptCommand, initEditTaskScript, registerScriptWriteback } from "./commands/editTaskScript";
+import { disposeEditTaskScript, editTaskScriptCommand, registerScriptWriteback } from "./commands/editTaskScript";
 
 const YAML_LIKE = /\.(ya?ml)$/i;
 
@@ -147,7 +147,6 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("tekton-intellisense.editTaskScript", editTaskScriptCommand)
   );
 
-  initEditTaskScript(context.globalStorageUri);
   registerScriptWriteback(context);
 }
 

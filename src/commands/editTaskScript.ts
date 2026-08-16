@@ -6,22 +6,27 @@
  * writes the (reindented) result back into the YAML on save.
  */
 import * as vscode from "vscode";
+import * as os from "os";
+import * as path from "path";
 import { parseTektonDocument } from "../tekton/model";
 import { EmbeddedScriptBlock, findEmbeddedScriptBlocks, LANGUAGE_EXTENSIONS, reindentScriptContent } from "../tekton/scriptEmbed";
 
 /**
- * Used only when the host document isn't in any open workspace folder (or
- * none is open at all) — the fallback for a scratch location that's still
- * always writable. The normal case lives under the *workspace* instead
- * (see {@link scratchDirFor}): a scratch file sitting under
- * `context.globalStorageUri` got syntax highlighting but no real
- * IntelliSense from Pylance, even with the language extension installed
- * and working fine elsewhere — being inside an actual project folder (not
- * just "some real file on disk") turned out to matter for full analysis,
- * not just having a `file:` scheme URI.
+ * EXPERIMENTAL: scratch files live under the OS temp directory rather than
+ * inside the workspace (`<folder>/.vscode/tekton-script-edits`, tried
+ * first) or under `context.globalStorageUri` (tried before that). Neither
+ * of those two turned out to be quite right for a reason not fully pinned
+ * down: `globalStorageUri` (nested under VS Code's own app-config
+ * directory) got syntax highlighting but no real IntelliSense from
+ * Pylance, even with the extension installed and confirmed working
+ * elsewhere; a loose file saved by hand to somewhere ordinary (home
+ * directory / temp) got full IntelliSense with no workspace involved at
+ * all. `os.tmpdir()` is the closest match to that ordinary-location case —
+ * if this doesn't pan out either, workspace membership goes back on the
+ * table as the real requirement, but that hasn't been cleanly proven yet.
  */
-let fallbackStorageDir: vscode.Uri | undefined;
-const ensuredDirs = new Set<string>();
+const scratchDir = vscode.Uri.file(path.join(os.tmpdir(), "tekton-intellisense-script-edits"));
+let scratchDirEnsured: Thenable<void> | undefined;
 
 interface ScratchRegistration {
   hostUri: vscode.Uri;
@@ -32,24 +37,14 @@ interface ScratchRegistration {
 /** scratch file URI (as a string) -> which host document/block it writes back to. */
 const registrations = new Map<string, ScratchRegistration>();
 
-/** Must be called once during activation with a writable, extension-owned fallback directory (`context.globalStorageUri`). */
-export function initEditTaskScript(storageDir: vscode.Uri): void {
-  fallbackStorageDir = vscode.Uri.joinPath(storageDir, "script-edits");
-}
-
-/** The workspace folder containing `hostUri` if there is one, else the first open folder, else undefined (no workspace open at all). */
-function scratchDirFor(hostUri: vscode.Uri): vscode.Uri {
-  const folder = vscode.workspace.getWorkspaceFolder(hostUri) ?? vscode.workspace.workspaceFolders?.[0];
-  if (folder) return vscode.Uri.joinPath(folder.uri, ".vscode", "tekton-script-edits");
-  if (!fallbackStorageDir) throw new Error("tekton-intellisense: editTaskScript used before initEditTaskScript()");
-  return fallbackStorageDir;
-}
-
-async function ensureDir(dir: vscode.Uri): Promise<void> {
-  const key = dir.toString();
-  if (ensuredDirs.has(key)) return;
-  await vscode.workspace.fs.createDirectory(dir);
-  ensuredDirs.add(key);
+async function ensureScratchDir(): Promise<void> {
+  if (!scratchDirEnsured) {
+    scratchDirEnsured = vscode.workspace.fs.createDirectory(scratchDir).then(
+      () => undefined,
+      () => undefined // best-effort; a failed write below is what actually surfaces the problem
+    );
+  }
+  await scratchDirEnsured;
 }
 
 /** Short, stable, filesystem-safe hash so scratch filenames stay short but don't collide across different host files sharing a basename. */
@@ -67,8 +62,7 @@ function sanitizeForFilename(name: string): string {
 
 /** Opens (writing fresh content only if not already open — an already-open scratch file may have unsaved user edits) the scratch file for `block`. */
 async function getOrCreateScratchFile(hostUri: vscode.Uri, block: EmbeddedScriptBlock): Promise<vscode.Uri> {
-  const dir = scratchDirFor(hostUri);
-  await ensureDir(dir);
+  await ensureScratchDir();
 
   const ext = LANGUAGE_EXTENSIONS[block.languageId] ?? "txt";
   const hostBase = sanitizeForFilename(hostUri.path.split("/").pop() ?? "task");
@@ -76,7 +70,7 @@ async function getOrCreateScratchFile(hostUri: vscode.Uri, block: EmbeddedScript
   // Stable per (host file, step name) so re-invoking the command on the same step reopens the
   // same tab instead of piling up new ones; namespaced by a hash of the full host URI so two
   // different files that happen to share a basename and step name don't collide.
-  const uri = vscode.Uri.joinPath(dir, `${hostBase}__${container}__${shortHash(hostUri.toString())}.${ext}`);
+  const uri = vscode.Uri.joinPath(scratchDir, `${hostBase}__${container}__${shortHash(hostUri.toString())}.${ext}`);
 
   const alreadyOpen = vscode.workspace.textDocuments.some((d) => d.uri.toString() === uri.toString());
   if (!alreadyOpen) {
