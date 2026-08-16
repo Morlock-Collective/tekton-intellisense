@@ -111,14 +111,18 @@ export class TektonReferenceProvider implements vscode.ReferenceProvider {
     const locations: vscode.Location[] = [];
 
     switch (target.kind) {
-      case "workspace":
-      case "task-alias": {
-        const declRange = declarationRange(parsed, target.kind, target.name);
-        for (const range of noopRename(sameDocumentEdits(parsed, target.kind, target.name, target.name))) {
-          // sameDocumentEdits always includes the declaration itself as its first edit.
-          if (!context.includeDeclaration && declRange && range[0] === declRange[0] && range[1] === declRange[1]) continue;
-          locations.push(toLocation(document.uri, parsed, range));
+      case "workspace": {
+        addSameDocRefs(locations, document.uri, parsed, "workspace", target.name, context.includeDeclaration);
+        // Only a Pipeline's own declared workspace can be bound from elsewhere (via pipelineRef) --
+        // a Task/etc's own workspace has no such cross-file binding in scope (see rename.ts).
+        if (parsed.symbols.kind === "Pipeline") {
+          await addCrossFilePipelineWorkspaceReferences(locations, parsed, target.name);
         }
+        return dedupe(locations);
+      }
+
+      case "task-alias": {
+        addSameDocRefs(locations, document.uri, parsed, "task-alias", target.name, context.includeDeclaration);
         return locations;
       }
 
@@ -223,6 +227,37 @@ export class TektonReferenceProvider implements vscode.ReferenceProvider {
 function declarationRange(parsed: ParsedTektonDoc, kind: "param" | "workspace" | "task-alias", name: string): [number, number] | undefined {
   const list = kind === "param" ? parsed.symbols.params : kind === "workspace" ? parsed.symbols.workspaces : parsed.symbols.tasks;
   return list.find((s) => s.name === name)?.range;
+}
+
+/** Every same-document occurrence of a workspace/task-alias — shared by the `"workspace"`/`"task-alias"` cases, which otherwise differ only in whether they also scan cross-file. */
+function addSameDocRefs(
+  locations: vscode.Location[],
+  uri: vscode.Uri,
+  parsed: ParsedTektonDoc,
+  kind: "workspace" | "task-alias",
+  name: string,
+  includeDeclaration: boolean
+): void {
+  const declRange = declarationRange(parsed, kind, name);
+  for (const range of noopRename(sameDocumentEdits(parsed, kind, name, name))) {
+    // sameDocumentEdits always includes the declaration itself as its first edit.
+    if (!includeDeclaration && declRange && range[0] === declRange[0] && range[1] === declRange[1]) continue;
+    locations.push(toLocation(uri, parsed, range));
+  }
+}
+
+/** Read-only counterpart to rename.ts's addCrossFilePipelineWorkspaceEdits — merges every matching PipelineRun's workspace binding rather than resolving to one. */
+async function addCrossFilePipelineWorkspaceReferences(locations: vscode.Location[], pipelineParsed: ParsedTektonDoc, workspaceName: string): Promise<void> {
+  const pipelineName = pipelineParsed.symbols.metadataName;
+  if (!pipelineName) return;
+
+  const runs = await findWorkspaceDocs(["PipelineRun"]);
+  for (const { uri, parsed } of runs) {
+    if (parsed.symbols.pipelineRefName !== pipelineName) continue;
+    for (const w of parsed.symbols.workspaces) {
+      if (w.name === workspaceName && w.range) locations.push(toLocation(uri, parsed, w.range));
+    }
+  }
 }
 
 function addResultReferences(

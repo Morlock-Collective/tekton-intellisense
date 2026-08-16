@@ -356,6 +356,44 @@ console.log("\nrename: workspace, declaration <-> task-level workspace binding:"
   }
 }
 
+console.log("\nrename: workspace, declaration <-> PipelineRun's own workspace binding, cross-file:");
+{
+  // A PipelineRun binds a Pipeline's declared workspace by providing a spec.workspaces[] entry
+  // with the *same name* as a top-level sibling, not through a nested `workspace:` indirection
+  // like a Pipeline task entry's binding -- a different shape from the same-document case above,
+  // and cross-file (via pipelineRef) on top of that. all-kinds-multidoc.yaml's mdk-pipeline and
+  // mdk-pipelinerun (pipelineRef: mdk-pipeline) are both real, in-use fixture resources -- not
+  // rename-specific throwaway ones -- exercising this as a same-file cross-document case too.
+  const source = fs.readFileSync(path.join(__dirname, "all-kinds-multidoc.yaml"), "utf8");
+  const docs = parseTektonFile(source);
+  const pipeline = docs.find((d) => d.symbols.metadataName === "mdk-pipeline");
+  const run = docs.find((d) => d.symbols.metadataName === "mdk-pipelinerun");
+
+  const declOffset = source.indexOf("name: mdk-workspace") + "name: ".length;
+  const target = resolveRenameTarget(pipeline, declOffset);
+  const sameDocEdits = target ? sameDocumentEdits(pipeline, "workspace", target.name, "mdk-workspace-renamed") : [];
+
+  // Mirrors rename.ts's addCrossFilePipelineWorkspaceEdits: every PipelineRun whose pipelineRef
+  // matches gets its own spec.workspaces[] entry of the same name updated.
+  const crossFileEdits = run.symbols.workspaces
+    .filter((w) => w.name === "mdk-workspace")
+    .map((w) => ({ range: w.range, newText: "mdk-workspace-renamed" }));
+  const crossFileApplied = applyTextEdits(source, crossFileEdits);
+
+  const ok =
+    target?.kind === "workspace" &&
+    target.name === "mdk-workspace" &&
+    sameDocEdits.length === 2 && // declaration + the Pipeline task entry's own workspace: binding
+    run.symbols.pipelineRefName === "mdk-pipeline" &&
+    crossFileEdits.length === 1 &&
+    crossFileApplied.includes("name: mdk-workspace-renamed\n      emptyDir: {}");
+  console.log(`  [${ok ? "PASS" : "FAIL"}] target resolves(${target?.kind === "workspace"}), same-doc edits(${sameDocEdits.length}), PipelineRun's own binding found and renamed(${crossFileEdits.length} edit(s))`);
+  if (!ok) {
+    console.log({ target, sameDocEdits, pipelineRefName: run.symbols.pipelineRefName, crossFileEdits });
+    failures++;
+  }
+}
+
 console.log("\nrename: task alias, declaration <-> other tasks' runAfter entries:");
 {
   // A task alias appearing in another task's runAfter: [name, ...] is a plain YAML scalar, not

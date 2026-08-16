@@ -127,10 +127,20 @@ export class TektonRenameProvider implements vscode.RenameProvider {
     const edit = new vscode.WorkspaceEdit();
 
     switch (target.kind) {
-      case "workspace":
+      case "workspace": {
+        assertNoLocalCollision(parsed, "workspace", target.name, newName);
+        addEdits(edit, document.uri, parsed, sameDocumentEdits(parsed, "workspace", target.name, newName));
+        // Only a Pipeline's own declared workspace can be bound from elsewhere (via pipelineRef) --
+        // a Task/etc's own workspace has no such cross-file binding in scope.
+        if (parsed.symbols.kind === "Pipeline") {
+          await this.addCrossFilePipelineWorkspaceEdits(edit, parsed, target.name, newName);
+        }
+        return edit;
+      }
+
       case "task-alias": {
-        assertNoLocalCollision(parsed, target.kind, target.name, newName);
-        addEdits(edit, document.uri, parsed, sameDocumentEdits(parsed, target.kind, target.name, newName));
+        assertNoLocalCollision(parsed, "task-alias", target.name, newName);
+        addEdits(edit, document.uri, parsed, sameDocumentEdits(parsed, "task-alias", target.name, newName));
         return edit;
       }
 
@@ -394,6 +404,41 @@ export class TektonRenameProvider implements vscode.RenameProvider {
       if (parsed.symbols.taskRefName !== taskName) continue;
       for (const p of parsed.symbols.params) {
         if (p.name === paramName && p.range) addEdits(edit, uri, parsed, [{ range: p.range, newText: newName }]);
+      }
+    }
+  }
+
+  /**
+   * Propagates a Pipeline's declared workspace rename into every
+   * PipelineRun's own top-level `spec.workspaces: [{name, ...}]` binding
+   * pointing at it via `pipelineRef` — unlike a Pipeline task entry's
+   * `workspace:` field (a same-document binding sameDocumentEdits already
+   * covers), a PipelineRun provides a workspace *by the same name* as a
+   * top-level sibling entry, so this is the cross-file counterpart of that
+   * same-document case, one level up. Mirrors {@link addCrossFileParamEdits}.
+   */
+  private async addCrossFilePipelineWorkspaceEdits(
+    edit: vscode.WorkspaceEdit,
+    pipelineParsed: ParsedTektonDoc,
+    workspaceName: string,
+    newName: string
+  ): Promise<void> {
+    const pipelineName = pipelineParsed.symbols.metadataName;
+    if (!pipelineName) return;
+
+    const sameName = this.workspaceIndex.lookupAllPipelineRecords(pipelineName);
+    if (sameName.length > 1) {
+      void vscode.window.showWarningMessage(
+        `Tekton Intellisense: "${pipelineName}" is declared by ${sameName.length} different Pipeline files — only this file's own workspace was updated. Update workspace bindings in PipelineRuns by hand if needed.`
+      );
+      return;
+    }
+
+    const runs = await findWorkspaceDocs(["PipelineRun"]);
+    for (const { uri, parsed } of runs) {
+      if (parsed.symbols.pipelineRefName !== pipelineName) continue;
+      for (const w of parsed.symbols.workspaces) {
+        if (w.name === workspaceName && w.range) addEdits(edit, uri, parsed, [{ range: w.range, newText: newName }]);
       }
     }
   }
