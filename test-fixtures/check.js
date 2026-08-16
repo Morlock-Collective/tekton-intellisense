@@ -1412,5 +1412,26 @@ console.log("\nEmbedded script block detection (scriptEmbed.ts):");
   if (!okReindentEdited) failures++;
 }
 
+console.log("\nPipeline task entry's inline taskSpec: steps/sidecars recognized (not just standalone Task/TaskRun):");
+{
+  const source = fs.readFileSync(path.join(__dirname, "pipeline-inline-taskspec.yaml"), "utf8");
+  const parsed = parseTektonDocument(source);
+
+  const entries = stepAndSidecarEntryMaps(parsed);
+  const okEntries = entries.length === 2 && entries.map((e) => e.get("name")).join(",") === "build-step,report";
+  console.log(`  [${okEntries ? "PASS" : "FAIL"}] stepAndSidecarEntryMaps finds both inline-taskSpec steps: ${JSON.stringify(entries.map((e) => e.get("name")))}`);
+  if (!okEntries) failures++;
+
+  const scriptOffset = source.indexOf("script: echo");
+  const okFind = !!findEnclosingStepEntry(parsed, scriptOffset);
+  console.log(`  [${okFind ? "PASS" : "FAIL"}] findEnclosingStepEntry resolves a cursor inside an inline-taskSpec step`);
+  if (!okFind) failures++;
+
+  const blocks = findEmbeddedScriptBlocks(parsed);
+  const okBlocks = blocks.length === 1 && blocks[0].languageId === "python" && blocks[0].containerName === "build-step";
+  console.log(`  [${okBlocks ? "PASS" : "FAIL"}] findEmbeddedScriptBlocks finds the python shebang inside an inline-taskSpec step: ${JSON.stringify(blocks.map((b) => ({ lang: b.languageId, name: b.containerName })))}`);
+  if (!okBlocks) failures++;
+}
+
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) FAILED.`);
 process.exit(failures === 0 ? 0 : 1);

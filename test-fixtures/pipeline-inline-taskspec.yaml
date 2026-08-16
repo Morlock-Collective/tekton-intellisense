@@ -1,0 +1,22 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: inline-pipeline
+spec:
+  params:
+    - name: image
+      type: string
+  tasks:
+    - name: build
+      taskSpec:
+        params:
+          - name: image
+            type: string
+        steps:
+          - name: build-step
+            script: |
+              #!/usr/bin/env python3
+              import sys
+              print("$(params.image)")
+          - name: report
+            script: echo $(params.imagee)

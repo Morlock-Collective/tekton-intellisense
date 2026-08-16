@@ -650,24 +650,42 @@ export function findEnclosingTaskEntry(parsed: ParsedTektonDoc, offset: number):
   return pipelineTaskEntryMaps(parsed).find((m) => m.range && offset >= m.range[0] && offset <= m.range[2]);
 }
 
-/**
- * Every `spec.steps[]`/`spec.sidecars[]` entry as its raw YAMLMap node
- * (Task/ClusterTask/StepAction or TaskRun-inline-taskSpec aware, via
- * {@link resolveTaskSpecOwner}). Same precision concern as
- * {@link pipelineTaskEntryMaps}: a step's own nested maps (`resources`,
- * `env`, ...) shouldn't be mistaken for the step itself.
- */
-export function stepAndSidecarEntryMaps(parsed: ParsedTektonDoc): YAMLMap[] {
-  const owner = resolveTaskSpecOwner(parsed);
-  if (!owner) return [];
+function stepAndSidecarEntriesOf(ownerMap: YAMLMap): YAMLMap[] {
   const maps: YAMLMap[] = [];
   for (const key of ["steps", "sidecars"]) {
-    const seq = findSeqIn(owner.ownerMap, key);
+    const seq = findSeqIn(ownerMap, key);
     if (!seq) continue;
     for (const item of seq.items) {
       if (isMap(item)) maps.push(item);
     }
   }
+  return maps;
+}
+
+/**
+ * Every `spec.steps[]`/`spec.sidecars[]` entry as its raw YAMLMap node —
+ * a Task/ClusterTask/StepAction or TaskRun-inline-taskSpec's own (via
+ * {@link resolveTaskSpecOwner}), *and* any Pipeline task entry's own inline
+ * `taskSpec:` (a Pipeline task can embed a full Task definition instead of
+ * a `taskRef`, and its steps/sidecars are just as real as a standalone
+ * Task's — step/sidecar-scoped features like "Edit Task Script" and
+ * `bindParamToEnv` shouldn't only work for the former). The two sources
+ * are mutually exclusive by document kind, so no risk of double-counting.
+ * Same precision concern as {@link pipelineTaskEntryMaps}: a step's own
+ * nested maps (`resources`, `env`, ...) shouldn't be mistaken for the step
+ * itself.
+ */
+export function stepAndSidecarEntryMaps(parsed: ParsedTektonDoc): YAMLMap[] {
+  const maps: YAMLMap[] = [];
+
+  const owner = resolveTaskSpecOwner(parsed);
+  if (owner) maps.push(...stepAndSidecarEntriesOf(owner.ownerMap));
+
+  for (const taskEntry of pipelineTaskEntryMaps(parsed)) {
+    const taskSpec = mapOf(taskEntry.get("taskSpec", true));
+    if (taskSpec) maps.push(...stepAndSidecarEntriesOf(taskSpec));
+  }
+
   return maps;
 }
 
