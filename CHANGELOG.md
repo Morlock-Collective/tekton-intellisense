@@ -6,6 +6,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 - "Bind All Parameters to Environment Variables" command
+- Rename support for a step's `ref` (StepAction identity), cross-file
 
 ### Fixed
 - Workspace rename didn't update or work from task-level `workspace:` bindings
