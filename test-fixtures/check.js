@@ -99,6 +99,7 @@ function check(file, expectedWarnings) {
 
 check("pipeline-typo.yaml", 1);
 check("helm-templated-task.yaml", 1);
+check("helm-top-level-if.yaml", 1);
 
 // Task-level `workspaces: [{name, workspace}]` bindings: the `workspace:`
 // value is a plain field, not $(...) syntax, so it's checked separately

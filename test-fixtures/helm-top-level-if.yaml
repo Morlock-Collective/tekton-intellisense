@@ -1,0 +1,16 @@
+{{- if .Values.enabled }}
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: {{ include "mychart.fullname" . }}-build
+spec:
+  params:
+    - name: image
+      type: string
+  steps:
+    - name: build
+      image: alpine
+      script: |
+        echo $(params.image)
+        echo $(params.imagee)
+{{- end }}
