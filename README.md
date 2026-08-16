@@ -15,30 +15,16 @@ of future improvement.
 - **Reference highlighting** — the name inside `$(params.x)`,
   `$(workspaces.x.path)`, `$(results.x.path)`, `$(tasks.x.results.y)` is
   decorated distinctly from plain YAML, and so is the `name:` field at the
-  point of declaration (in `spec.params`/`workspaces`/`results`/`tasks`
-  entries) — so it's obvious which key is the identifier even when `name`
-  isn't the first field.
+  point of declaration (for `params`/`workspaces`/`results`/`tasks`).
 - **Reference validation** — every `$(...)` reference is checked against the
   document's declared `spec.params`, `spec.workspaces`, `spec.results`, and
   (for Pipelines) `spec.tasks`/`spec.finally` names. Unknown or misspelled
   names get a warning with a "did you mean" suggestion (Levenshtein
   distance) and a quick fix to apply it.
-- **Duplicate-name validation** — a repeated name within `spec.params`,
-  `spec.workspaces`, `spec.results`, or `spec.tasks`/`finally` is flagged as
-  an error on every occurrence — the kind of thing the Kubernetes API
-  server rejects at apply time anyway.
-- **Task-level workspace binding validation** — a pipeline task's
-  `workspaces: [{name, workspace}]` entries get the same "did you mean"
-  treatment as `$(...)` references when `workspace:` doesn't match any of
-  the Pipeline's declared `spec.workspaces[]` — a plain field value, not
-  template syntax, but the same typo-invisible-until-runtime failure mode.
-- **Missing-`runAfter` hint** — a task referencing another task's result
-  via `$(tasks.X.results.Y)` gets its ordering inferred automatically by
-  Tekton either way, so this is an `Information`-level suggestion, not a
-  warning: if `X` isn't also listed in that task's own `runAfter`, a quick
-  fix adds it, making a dependency that's otherwise only visible by
-  cross-referencing param values explicit in the one place a reader would
-  look first.
+- **Duplicate-name validation** — duplicated `name` fields in `params`, `workspaces` or `results`, as well as `tasks` and `finally` lists, are checked against.
+- **Task-level workspace binding validation** — Works the same way as parameter validation.
+- **Missing-`runAfter` hint** — an informative hint if omitting runAfter when 
+  referencing the result from an earlier task (if the user wants to make the order explicit).
 - **Tekton Triggers support** — `EventListener`/`Trigger`/`TriggerTemplate`/
   `TriggerBinding`/`ClusterTriggerBinding` get the same reference validation,
   highlighting, hover, Go to Definition, Find All References, and Rename as
@@ -50,12 +36,11 @@ of future improvement.
   `value:` are recognized and highlighted but never validated — there's no
   declared schema for the incoming webhook payload to check them against.
 - **Context-aware completion** — typing `$(params.` (or `workspaces.`,
-  `results.`, `tasks.`, `context.`) suggests exactly what's valid there:
-  declared names for the current document, filtered by resource kind (no
-  `tasks.` inside a Task, no `results.` inside a Pipeline), narrowing to leaf
+  `results.`, `tasks.`, `context.`) suggests what's valid there:
+  declared names for the current document, filtered by resource kind, narrowing to leaf
   fields once a name is chosen (`workspaces.x.path|claim|volume|bound`,
   `context.pipelineRun.name|namespace|uid`, ...). `$(tasks.X.results.` is
-  resolved against the *actual* Task `X`'s `taskRef` points at — including
+  resolved against the Task `X`'s `taskRef` points at — including
   across files, via a lightweight workspace-wide index kept current by a
   file watcher (`src/tekton/workspaceIndex.ts`) — the normal case in Helm
   charts that split Tasks and Pipelines into separate templates.
@@ -68,8 +53,8 @@ of future improvement.
   `$(context.*)` shows what the built-in variable means.
 - **Go to Definition / Find All References** — jump from a `$(...)`
   reference to its declaration; for `$(tasks.X.results.Y)`, `Y` resolves
-  cross-file to the actual Task's declared result, even in a file you
-  haven't opened. References to a Task's result or a Task/Pipeline's own
+  cross-file to the referenced Task's declared result. 
+  References to a Task's result or a Task/Pipeline's own
   identity (`taskRef`/`pipelineRef`) search the whole workspace, and — since
   this is read-only — show every matching candidate when a name is
   ambiguous rather than guessing at one.
@@ -77,19 +62,15 @@ of future improvement.
   within their own file. A Task's declared result and a Task/Pipeline's own
   identity (`metadata.name`, referenced by `taskRef`/`pipelineRef`) rename
   **workspace-wide by default**, invocable from either the declaration or
-  any reference to it. If a name is ambiguous (two files sharing a
-  `metadata.name` — a vendored Task present in more than one chart is a
-  real case, not a hypothetical): renaming the declaration itself still
-  works, since that's unambiguous by construction, but skips cross-file
-  updates with a warning; renaming *from* an ambiguous reference is
-  rejected outright, since there's no way to know which declaration it
-  means.
+  any reference to it. If a reference is _ambigous_, renames will only apply 
+  locally at the point of declaration, and renames cannot be performed at
+  the point of use, unless the reference is _unambigous_.
 - **Commands** (Command Palette or editor context menu) resolve *where* to
   insert from the document's structure rather than cursor position,
   wherever that's well-defined; where it genuinely isn't (which task, which
   step — there can be several), the cursor is a fast path and a picker is
   the fallback:
-  - `Tekton: Add Parameter` — always appends last in the correct list, and
+  - `Tekton: Add Parameter` — always appends last in the params list, and
     is resource-aware: Pipeline/Task/ClusterTask/StepAction get a
     declaration (name/type/description/default) under `spec.params`; a
     PipelineRun/TaskRun using a `..Ref` gets a value binding (name/value)
@@ -105,14 +86,10 @@ of future improvement.
     param, name the env var, and it's inserted into a step/sidecar's `env:`
     list (creating it if needed): the one under your cursor if there is
     one, otherwise pick from a list of the Task's steps/sidecars.
-
-## Why not a graphical editor?
-
-Pipelines-as-YAML is the actual interface Tekton, Helm, GitOps tooling, and
-code review all operate on. A graphical editor adds a translation layer and
-a second source of truth. This extension instead makes the text itself
-easier to get right — closer to how a good LSP makes a programming language
-easier to write, not by hiding the code.
+  - `Tekton: Edit Task Script` — when in the context of a script block, use this
+    to edit the contexts of the script in a separate file, letting you take advantage
+    of whatever tooling you have for that script language. The file extension is inferred
+    from the shebang used in the script.
 
 ## Development
 
@@ -136,8 +113,7 @@ npm test        # compiles, then runs test-fixtures/check.js (exits non-zero on 
 
 ## Status
 
-Early and actively growing — see `docs/ROADMAP.md` for
-what's implemented and what's next.
+Early, unstable, and still mostly LLM-trash, but functional and better than nothing.
 
 ## References
 
