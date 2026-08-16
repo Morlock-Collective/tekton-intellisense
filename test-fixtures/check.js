@@ -664,6 +664,125 @@ console.log("\nbindParamToEnv simulation:");
   }
 }
 
+/** Mirrors editUtils.ts's toEnvVarName(). */
+function simToEnvVarName(name) {
+  const snake = name
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/[^A-Za-z0-9]+/g, "_")
+    .toUpperCase()
+    .replace(/^_+|_+$/g, "");
+  return snake || "VALUE";
+}
+
+/** Mirrors editUtils.ts's alreadyBoundParamNames(). */
+function simAlreadyBoundParamNames(container) {
+  const bound = new Set();
+  const env = container.get("env", true);
+  if (!env || !Array.isArray(env.items)) return bound;
+  for (const item of env.items) {
+    const valueNode = item.get && item.get("value", true);
+    const value = valueNode && typeof valueNode.value === "string" ? valueNode.value : undefined;
+    const m = value && /^\$\(params\.([^.)]+)\)$/.exec(value.trim());
+    if (m) bound.add(m[1]);
+  }
+  return bound;
+}
+
+/** Mirrors editUtils.ts's existingEnvNames(). */
+function simExistingEnvNames(container) {
+  const names = new Set();
+  const env = container.get("env", true);
+  if (!env || !Array.isArray(env.items)) return names;
+  for (const item of env.items) {
+    const nameNode = item.get && item.get("name", true);
+    if (nameNode && typeof nameNode.value === "string") names.add(nameNode.value);
+  }
+  return names;
+}
+
+/** Mirrors editUtils.ts's uniqueEnvName(). */
+function simUniqueEnvName(base, used) {
+  let candidate = base;
+  let n = 2;
+  while (used.has(candidate)) candidate = `${base}_${n++}`;
+  used.add(candidate);
+  return candidate;
+}
+
+/** Mirrors editUtils.ts's insertEnvBindings() generalized to N bindings. */
+function simulateInsertEnvBindings(source, stepName, bindings) {
+  const parsed = parseTektonDocument(source);
+  const container = stepAndSidecarEntryMaps(parsed).find((m) => m.get("name") === stepName);
+  if (!container?.range) return { container: undefined };
+
+  const entryLines = bindings.flatMap(({ envName, paramName }) => [`- name: ${envName}`, `  value: $(params.${paramName})`]);
+  const existingEnv = container.get("env", true);
+  let text, offset;
+  if (existingEnv && existingEnv.range && Array.isArray(existingEnv.items)) {
+    const lastItem = existingEnv.items[existingEnv.items.length - 1];
+    const rawAnchor = lastItem?.range ? lastItem.range[1] : existingEnv.range[1];
+    offset = trimTrailingNewline(parsed.text, rawAnchor);
+    const indent = indentAtOffset(parsed.text, existingEnv.range[0]);
+    text = blockAfterText(entryLines, indent);
+  } else {
+    const indent = indentAtOffset(parsed.text, container.range[0]);
+    offset = trimTrailingNewline(parsed.text, container.range[1]);
+    text = blockAfterText(["env:", ...entryLines.map((l) => "  " + l)], indent + "  ");
+  }
+  return { container, result: source.slice(0, offset) + text + source.slice(offset) };
+}
+
+console.log("\nbindAllParamsToEnv simulation:");
+{
+  const source = fs.readFileSync(path.join(__dirname, "task-multi-param.yaml"), "utf8");
+  const parsed = parseTektonDocument(source);
+  const params = parsed.symbols.params.map((p) => p.name);
+
+  // "build": no existing env, no params bound yet -- all 3 candidates offered, and the
+  // image-tag/imageTag name collision (both derive to IMAGE_TAG) gets disambiguated.
+  {
+    const container = stepAndSidecarEntryMaps(parsed).find((m) => m.get("name") === "build");
+    const alreadyBound = simAlreadyBoundParamNames(container);
+    const candidates = params.filter((p) => !alreadyBound.has(p));
+    const usedNames = simExistingEnvNames(container);
+    const bindings = candidates.map((p) => ({ envName: simUniqueEnvName(simToEnvVarName(p), usedNames), paramName: p }));
+
+    const okCandidates = candidates.length === 3;
+    const okCollision =
+      bindings.find((b) => b.paramName === "image-tag")?.envName === "IMAGE_TAG" &&
+      bindings.find((b) => b.paramName === "imageTag")?.envName === "IMAGE_TAG_2";
+    console.log(
+      `  [${okCandidates && okCollision ? "PASS" : "FAIL"}] "build": all 3 params candidates, image-tag/imageTag collision disambiguated (${JSON.stringify(bindings)})`
+    );
+    if (!(okCandidates && okCollision)) failures++;
+
+    const { result } = simulateInsertEnvBindings(source, "build", bindings);
+    let ok;
+    try {
+      const after = YAML.parse(result);
+      const buildStep = after.spec.steps.find((s) => s.name === "build");
+      ok = buildStep?.env?.length === 3 && new Set(buildStep.env.map((e) => e.name)).size === 3;
+    } catch {
+      ok = false;
+    }
+    console.log(`  [${ok ? "PASS" : "FAIL"}] "build": all 3 bindings inserted with distinct env var names`);
+    if (!ok) {
+      console.log(result);
+      failures++;
+    }
+  }
+
+  // "deploy": "region" is already bound via $(params.region) -- excluded from candidates.
+  {
+    const container = stepAndSidecarEntryMaps(parsed).find((m) => m.get("name") === "deploy");
+    const alreadyBound = simAlreadyBoundParamNames(container);
+    const candidates = params.filter((p) => !alreadyBound.has(p));
+    const ok = alreadyBound.has("region") && !candidates.includes("region") && candidates.length === 2;
+    console.log(`  [${ok ? "PASS" : "FAIL"}] "deploy": already-bound "region" excluded from candidates (${JSON.stringify(candidates)})`);
+    if (!ok) failures++;
+  }
+}
+
 /** Mirrors addConditional.ts's own splicing logic for both branches (append to existing when:, or create fresh). */
 function simulateAddConditional(source, taskName, inputExpr, values) {
   const parsed = parseTektonDocument(source);

@@ -85,12 +85,27 @@ propagation with a warning; renaming *from* an ambiguous reference is
 rejected outright, since there's no way to know which declaration it
 means.
 
-**Editing commands** (Command Palette / context menu) — all four resolve
+**Editing commands** (Command Palette / context menu) — all resolve
 *where* to insert from the document's structure rather than cursor
 position, wherever that's well-defined (`Add Parameter`, `Add Task`);
 where it genuinely isn't (`Add When Expression`, `Bind Parameter to Env
 Var` — there can be multiple tasks/steps), the cursor is a fast path and a
 picker is the fallback.
+
+**Bind All Parameters to Environment Variables** — `bindParamToEnv`
+one-at-a-time was a bottleneck when a step genuinely needs most of a
+Task's declared params as env vars, the common case while first wiring up
+a step. Picks a step/sidecar (same cursor-first/picker pattern), excludes
+params already bound there (detected via an existing `$(params.NAME)`
+value, not just by env var name), then offers the rest through a
+multi-select QuickPick pre-checked so accepting all of them is a single
+Enter and dropping a few is a handful of clicks — both faster than adding
+them individually. Env var names are auto-derived and deduplicated against
+both each other and whatever's already in that step's `env:` list
+(`FOO_2`, `FOO_3`, ...), so two params that happen to derive to the same
+name (`image-tag`/`imageTag` → `IMAGE_TAG`) don't silently collide.
+`bindParamToEnv`'s own step-resolution and env-splicing logic moved to
+`editUtils.ts` so both commands share it exactly rather than drifting.
 
 **Tekton Triggers** (`triggers.tekton.dev/*`) — EventListener, Trigger,
 TriggerTemplate, TriggerBinding, and ClusterTriggerBinding get the same

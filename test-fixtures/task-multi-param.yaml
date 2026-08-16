@@ -1,0 +1,22 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: multi-param
+spec:
+  params:
+    - name: image-tag
+      type: string
+    - name: imageTag
+      type: string
+    - name: region
+      type: string
+  steps:
+    - name: build
+      image: alpine
+      script: echo building
+    - name: deploy
+      image: alpine
+      env:
+        - name: REGION
+          value: $(params.region)
+      script: echo deploying

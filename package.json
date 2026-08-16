@@ -48,6 +48,10 @@
         "title": "Tekton: Bind Parameter to Environment Variable"
       },
       {
+        "command": "tekton-intellisense.bindAllParamsToEnv",
+        "title": "Tekton: Bind All Parameters to Environment Variables"
+      },
+      {
         "command": "tekton-intellisense.addTask",
         "title": "Tekton: Add Task to Pipeline"
       },
@@ -68,6 +72,11 @@
       "editor/context": [
         {
           "command": "tekton-intellisense.bindParamToEnv",
+          "when": "tektonIntellisense.active",
+          "group": "tektonIntellisense"
+        },
+        {
+          "command": "tekton-intellisense.bindAllParamsToEnv",
           "when": "tektonIntellisense.active",
           "group": "tektonIntellisense"
         },

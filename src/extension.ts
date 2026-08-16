@@ -11,6 +11,7 @@ import { TektonDefinitionProvider } from "./tekton/definitions";
 import { TektonReferenceProvider } from "./tekton/references";
 import { TektonRenameProvider } from "./tekton/rename";
 import { bindParamToEnvCommand } from "./commands/bindParamToEnv";
+import { bindAllParamsToEnvCommand } from "./commands/bindAllParamsToEnv";
 import { addTaskCommand } from "./commands/addTask";
 import { addConditionalCommand } from "./commands/addConditional";
 import { addParameterCommand } from "./commands/addParameter";
@@ -141,6 +142,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.commands.registerCommand("tekton-intellisense.bindParamToEnv", bindParamToEnvCommand),
+    vscode.commands.registerCommand("tekton-intellisense.bindAllParamsToEnv", bindAllParamsToEnvCommand),
     vscode.commands.registerCommand("tekton-intellisense.addTask", addTaskCommand),
     vscode.commands.registerCommand("tekton-intellisense.addConditional", addConditionalCommand),
     vscode.commands.registerCommand("tekton-intellisense.addParameter", addParameterCommand),

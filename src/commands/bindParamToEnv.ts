@@ -1,12 +1,6 @@
 import * as vscode from "vscode";
-import { findEnclosingStepEntry, parseTektonDocument, stepAndSidecarEntryMaps, trimTrailingNewline } from "../tekton/model";
-import { indentAt, insertBlockAfter, toEnvVarName } from "./editUtils";
-import { isScalar, isSeq, YAMLMap } from "yaml";
-
-function stepEntryLabel(entry: YAMLMap, index: number): string {
-  const nameNode = entry.get("name", true);
-  return isScalar(nameNode) && typeof nameNode.value === "string" ? nameNode.value : `(step ${index + 1})`;
-}
+import { parseTektonDocument } from "../tekton/model";
+import { insertEnvBindings, pickStepOrSidecarEntry, toEnvVarName } from "./editUtils";
 
 /**
  * Binds a declared parameter to a container `env:` entry. If the cursor is
@@ -44,44 +38,13 @@ export async function bindParamToEnvCommand(): Promise<void> {
   });
   if (!envName) return;
 
-  const offset = document.offsetAt(editor.selection.active);
-  let container = findEnclosingStepEntry(parsed, offset);
-
-  if (!container) {
-    const entries = stepAndSidecarEntryMaps(parsed);
-    if (entries.length === 0) {
-      vscode.window.showWarningMessage("Tekton Intellisense: this document has no steps or sidecars to bind an env var into.");
-      return;
-    }
-    const chosen = await vscode.window.showQuickPick(
-      entries.map((entry, i) => ({ label: stepEntryLabel(entry, i), entry })),
-      { placeHolder: "Which step/sidecar should get the environment variable?" }
-    );
-    if (!chosen) return;
-    container = chosen.entry;
-  }
-
-  if (!container.range) return;
-
-  const existingEnv = container.get("env", true);
-  if (isSeq(existingEnv) && existingEnv.range) {
-    const lastItem = existingEnv.items[existingEnv.items.length - 1] as
-      | { range?: [number, number, number] }
-      | undefined;
-    const rawAnchor = lastItem?.range ? lastItem.range[1] : existingEnv.range[1];
-    const anchorOffset = trimTrailingNewline(parsed.text, rawAnchor);
-    const indent = indentAt(document, document.positionAt(existingEnv.range[0]));
-    await insertBlockAfter(editor, document.positionAt(anchorOffset), [`- name: ${envName}`, `  value: $(params.${picked})`], indent);
-    return;
-  }
-
-  // No existing env: list in this step/sidecar — create it, appended after the entry's last existing key.
-  const indent = indentAt(document, document.positionAt(container.range[0]));
-  const anchorOffset = trimTrailingNewline(parsed.text, container.range[1]);
-  await insertBlockAfter(
+  const container = await pickStepOrSidecarEntry(
     editor,
-    document.positionAt(anchorOffset),
-    ["env:", "  - name: " + envName, "    value: $(params." + picked + ")"],
-    indent + "  "
+    parsed,
+    "Which step/sidecar should get the environment variable?",
+    "Tekton Intellisense: this document has no steps or sidecars to bind an env var into."
   );
+  if (!container) return;
+
+  await insertEnvBindings(editor, parsed, container, [{ envName, paramName: picked }]);
 }

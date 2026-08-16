@@ -86,6 +86,11 @@ of future improvement.
     param, name the env var, and it's inserted into a step/sidecar's `env:`
     list (creating it if needed): the one under your cursor if there is
     one, otherwise pick from a list of the Task's steps/sidecars.
+  - `Tekton: Bind All Parameters to Environment Variables` — same target
+    picker, but offers every not-yet-bound param at once via a pre-checked
+    multi-select, with env var names auto-derived and deduplicated. Faster
+    than one-at-a-time when a step needs most of a Task's params as env
+    vars, the common case.
   - `Tekton: Edit Task Script` — when in the context of a script block, use this
     to edit the contexts of the script in a separate file, letting you take advantage
     of whatever tooling you have for that script language. The file extension is inferred
