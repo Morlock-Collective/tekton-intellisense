@@ -23,6 +23,7 @@ let diagnosticCollection: vscode.DiagnosticCollection;
 let statusBar: TektonStatusBar;
 
 const refreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
+let indexChangeTimer: ReturnType<typeof setTimeout> | undefined;
 
 function looksLikeYaml(document: vscode.TextDocument): boolean {
   // Rely on the file extension rather than languageId: other extensions (Helm,
@@ -107,6 +108,24 @@ export function activate(context: vscode.ExtensionContext): void {
       if (e.textEditor === vscode.window.activeTextEditor) refreshActiveEditorState(e.textEditor);
     }),
     vscode.workspace.onDidCloseTextDocument((doc) => diagnosticCollection.delete(doc.uri)),
+    // Cross-file diagnostics (an unresolved taskRef/pipelineRef/bindings[].ref/etc.) are checked
+    // against the workspace index, which only catches up with a just-applied edit (e.g. a rename
+    // that touches both a declaration and every file referencing it) once that file's own
+    // re-indexing debounce fires -- slightly later than diagnostics' own refresh debounce. Without
+    // this, a referencing file's diagnostics can recompute first, against the not-yet-updated
+    // index, flag an already-correct reference as unknown, and then never recompute again until
+    // something else happens to touch that file. Re-running diagnostics for every visible editor
+    // once the index settles (debounced here too, so a burst of index changes -- the initial
+    // workspace scan, or a multi-file rename -- coalesces into one pass) closes that gap.
+    workspaceIndex.onDidChangeIndex(() => {
+      if (indexChangeTimer) clearTimeout(indexChangeTimer);
+      indexChangeTimer = setTimeout(() => {
+        indexChangeTimer = undefined;
+        for (const editor of vscode.window.visibleTextEditors) {
+          refreshDiagnostics(editor.document, workspaceIndex);
+        }
+      }, 300);
+    }),
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("tektonIntellisense")) {
         for (const editor of vscode.window.visibleTextEditors) {
@@ -167,6 +186,7 @@ export function activate(context: vscode.ExtensionContext): void {
 export function deactivate(): void {
   for (const timer of refreshTimers.values()) clearTimeout(timer);
   refreshTimers.clear();
+  if (indexChangeTimer) clearTimeout(indexChangeTimer);
   diagnosticCollection?.dispose();
   statusBar?.dispose();
   disposeDecorations();

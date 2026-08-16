@@ -86,9 +86,25 @@ export class TektonWorkspaceIndex implements vscode.Disposable {
   /** Every resourceKey a given file (by uriKey) currently owns, across all groups — so a re-index or removal can wipe exactly its own previous entries, however many documents it holds, without touching any other file's. */
   private resourceKeysByUri = new Map<string, string[]>();
 
+  private readonly changeEmitter = new vscode.EventEmitter<void>();
+  /**
+   * Fires whenever a file's entries in this index change (indexed, re-indexed, or removed) — not
+   * on every text edit, only once the index itself has actually caught up with one. A rename that
+   * edits a resource's own file (its declaration) and a file referencing it by name applies both
+   * edits at once, but this index only catches up with the declaration's new name once its own
+   * file is re-indexed, which is debounced separately from (and slightly slower than) diagnostics'
+   * own refresh debounce. Without this, a referencing file's diagnostics can recompute against the
+   * *old* index entry moments after the rename, flag the (already-renamed, on-screen-correct)
+   * reference as unknown, and then never recompute again until something else happens to touch
+   * that file — extension.ts listens for this to re-run diagnostics once the index is consistent
+   * again, instead of requiring a save (or another edit) to notice.
+   */
+  readonly onDidChangeIndex = this.changeEmitter.event;
+
   constructor() {
     const watcher = vscode.workspace.createFileSystemWatcher(YAML_GLOB);
     this.disposables.push(
+      this.changeEmitter,
       watcher,
       watcher.onDidChange((uri) => void this.indexFileFromDisk(uri)),
       watcher.onDidCreate((uri) => void this.indexFileFromDisk(uri)),
@@ -155,6 +171,7 @@ export class TektonWorkspaceIndex implements vscode.Disposable {
       newKeys.push(rk);
     });
     if (newKeys.length > 0) this.resourceKeysByUri.set(uriKey, newKeys);
+    this.changeEmitter.fire();
   }
 
   private addToIndex(group: GroupState, rk: string, name: string, uri: vscode.Uri, parsed: ParsedTektonDoc): void {
@@ -191,6 +208,7 @@ export class TektonWorkspaceIndex implements vscode.Disposable {
 
   private remove(uri: vscode.Uri): void {
     this.removeUri(uri.toString());
+    this.changeEmitter.fire();
   }
 
   private lookupRecord(group: IndexGroup, name: string): IndexedResource | undefined {
