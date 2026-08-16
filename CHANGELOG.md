@@ -13,6 +13,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Workspace rename didn't update or work from task-level `workspace:` bindings
 - Task-alias rename didn't update or work from other tasks' `runAfter:` entries
 - The plain-scalar identity system (`taskRef`/`pipelineRef`/`template.ref`/`bindings[].ref`/`triggerRef`/a step's `ref`) and plain-field bindings (`workspace:`, `runAfter:`, a task's `params:`) were never highlighted, only `$(...)` syntax
+- Find All References missed a step's `ref` (same narrow doc-kind scan rename had before its earlier fix) and didn't support task-param bindings at all
 
 ## [0.2.1] - 2026-08-16
 
