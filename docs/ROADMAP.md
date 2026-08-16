@@ -266,6 +266,16 @@ the template or any bound TriggerBinding doesn't resolve at all —
 - Only literal block scalars (`script: |`) are supported for "Edit Task
   Script" — folded (`>`) and quoted/plain scripts are left alone, since
   the dedent math needs consistent per-line indentation to strip.
+- Multi-document YAML (a single file with more than one `---`-separated
+  resource — a common kubectl-apply bundling pattern) isn't supported at
+  all: `parseTektonDocument` uses `parseDocument`, not
+  `parseAllDocuments`, so only the first document in a file is ever seen.
+  Every other resource in that file is completely invisible to every
+  feature. Pinned by a test (`stepaction-and-task-multidoc.yaml`) rather
+  than silently left to regress further; actually supporting it would mean
+  reworking `parseTektonDocument` to return multiple documents and making
+  every position-aware feature aware of which one a given offset falls in
+  — a sizeable, cross-cutting change, not attempted here.
 
 ## Next up
 

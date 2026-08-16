@@ -1,0 +1,12 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: build
+spec:
+  steps:
+    - name: lint
+      ref:
+        name: shared-lint
+    - name: compile
+      image: golang
+      script: go build ./...

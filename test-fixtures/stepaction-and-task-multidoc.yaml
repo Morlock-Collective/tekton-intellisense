@@ -1,0 +1,28 @@
+# Multi-document YAML (a single file with more than one `---`-separated
+# resource) is a common kubectl-apply bundling pattern, but this extension
+# does not currently support it: parseTektonDocument only ever sees the
+# first document in a file. This fixture exists to document and pin that
+# known limitation, not to demonstrate working behavior — see
+# docs/ROADMAP.md and the "multi-document YAML" test in check.js.
+apiVersion: tekton.dev/v1
+kind: StepAction
+metadata:
+  name: shared-lint
+spec:
+  image: alpine
+  script: |
+    #!/usr/bin/env sh
+    echo "linting..."
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: build
+spec:
+  steps:
+    - name: lint
+      ref:
+        name: shared-lint
+    - name: compile
+      image: golang
+      script: go build ./...

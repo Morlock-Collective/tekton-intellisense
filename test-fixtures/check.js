@@ -576,18 +576,7 @@ console.log("\nrename: step ref (StepAction identity), same-doc and cross-file:"
 {
   // A step's `ref: { name: X }` (pointing at a shared StepAction) shares the same identity
   // namespace as taskRef.name -- TASK_LIKE_KINDS includes StepAction alongside Task/ClusterTask.
-  const taskSource = `apiVersion: tekton.dev/v1
-kind: Task
-metadata:
-  name: build
-spec:
-  steps:
-    - name: lint
-      ref:
-        name: shared-lint
-    - name: compile
-      image: golang
-`;
+  const taskSource = fs.readFileSync(path.join(__dirname, "task-uses-stepaction.yaml"), "utf8");
   const taskParsed = parseTektonDocument(taskSource);
 
   // Rename initiated from the point of use (the step's ref.name), not a declaration.
@@ -595,21 +584,14 @@ spec:
   const useTarget = resolveRenameTarget(taskParsed, useOffset);
   const sameDocEdits = useTarget ? taskRefIdentityEdits(taskParsed, useTarget.name, "shared-linter") : [];
   const okFromUse = useTarget?.kind === "task-identity" && useTarget.name === "shared-lint" && sameDocEdits.length === 1;
-  console.log(`  [${okFromUse ? "PASS" : "FAIL"}] Task's step ref.name resolves as a rename target and produces a same-doc edit`);
+  console.log(`  [${okFromUse ? "PASS" : "FAIL"}] task-uses-stepaction.yaml: step ref.name resolves as a rename target and produces a same-doc edit`);
   if (!okFromUse) {
     console.log({ useTarget, sameDocEdits });
     failures++;
   }
 
   // Rename initiated from the StepAction's own declaration must find the Task's step ref cross-file.
-  const stepActionSource = `apiVersion: tekton.dev/v1
-kind: StepAction
-metadata:
-  name: shared-lint
-spec:
-  image: alpine
-  script: echo lint
-`;
+  const stepActionSource = fs.readFileSync(path.join(__dirname, "stepaction-lint.yaml"), "utf8");
   const stepActionParsed = parseTektonDocument(stepActionSource);
   const declOffset = stepActionSource.indexOf("shared-lint") + 3;
   const declTarget = resolveRenameTarget(stepActionParsed, declOffset);
@@ -619,9 +601,25 @@ spec:
     declTarget.name === "shared-lint" &&
     crossFileEdits.length === 1 &&
     applyTextEdits(taskSource, crossFileEdits).includes("shared-linter");
-  console.log(`  [${okCrossFile ? "PASS" : "FAIL"}] StepAction declaration resolves as a rename target; cross-file scan finds the Task's step ref`);
+  console.log(`  [${okCrossFile ? "PASS" : "FAIL"}] stepaction-lint.yaml: declaration resolves as a rename target; cross-file scan finds task-uses-stepaction.yaml's step ref`);
   if (!okCrossFile) {
     console.log({ declTarget, crossFileEdits });
+    failures++;
+  }
+}
+
+console.log("\nmulti-document YAML: known limitation, only the first document in a file is recognized:");
+{
+  // Pinned deliberately, not celebrated -- stepaction-and-task-multidoc.yaml bundles a StepAction
+  // and a Task (referencing it) via `---` in one file, a common kubectl-apply pattern. parseDocument
+  // (not parseAllDocuments) means the Task is entirely invisible; this documents that boundary so a
+  // future change to it is a deliberate decision, not an unnoticed regression either way.
+  const source = fs.readFileSync(path.join(__dirname, "stepaction-and-task-multidoc.yaml"), "utf8");
+  const parsed = parseTektonDocument(source);
+  const ok = parsed?.symbols.kind === "StepAction" && parsed?.symbols.metadataName === "shared-lint";
+  console.log(`  [${ok ? "PASS" : "FAIL"}] only the first document (StepAction "shared-lint") is seen; the second (Task "build") is not`);
+  if (!ok) {
+    console.log({ kind: parsed?.symbols.kind, metadataName: parsed?.symbols.metadataName });
     failures++;
   }
 }

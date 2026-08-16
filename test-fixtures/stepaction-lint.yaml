@@ -1,0 +1,9 @@
+apiVersion: tekton.dev/v1
+kind: StepAction
+metadata:
+  name: shared-lint
+spec:
+  image: alpine
+  script: |
+    #!/usr/bin/env sh
+    echo "linting..."
