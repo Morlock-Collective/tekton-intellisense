@@ -25,6 +25,7 @@ const {
   sameDocumentEdits,
   sameDocumentResultEdits,
   taskResultReferenceEdits,
+  taskParamReferenceEdits,
   taskRefIdentityEdits,
   pipelineRefIdentityEdits,
   templateRefIdentityEdits,
@@ -425,6 +426,115 @@ console.log("\nrename: cross-file result (Task result <-> tasks.X.results.Y):");
   console.log(`  [${ok ? "PASS" : "FAIL"}] "digest" -> "imageDigest": target=${ok1}, task-file=${!!ok2}, pipeline-file=${ok3}`);
   if (!ok) {
     console.log({ target, taskResult, pipelineResult });
+    failures++;
+  }
+}
+
+console.log("\nrename: cross-file task-param (Task's declared param <-> a taskRef'd binding's name), same-doc and cross-file:");
+{
+  // Dedicated inline fixtures rather than reusing an existing one -- taskrun-ref.yaml's binding
+  // intentionally doesn't match its Task's declared param name, for a different existing test.
+  const taskSource = `apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: build-image
+spec:
+  params:
+    - name: image-tag
+      type: string
+  steps:
+    - name: build
+      script: echo $(params.image-tag)
+`;
+  const pipelineSource = `apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: p
+spec:
+  tasks:
+    - name: build
+      taskRef:
+        name: build-image
+      params:
+        - name: image-tag
+          value: latest
+`;
+  const taskRunSource = `apiVersion: tekton.dev/v1
+kind: TaskRun
+metadata:
+  name: run
+spec:
+  taskRef:
+    name: build-image
+  params:
+    - name: image-tag
+      value: latest
+`;
+  const taskParsed = parseTektonDocument(taskSource);
+  const pipelineParsed = parseTektonDocument(pipelineSource);
+  const taskRunParsed = parseTektonDocument(taskRunSource);
+
+  // From the Task's own declaration: same-doc edits cover the decl + its own $(params...) self-ref.
+  const declOffset = taskSource.indexOf("name: image-tag") + 6;
+  const declTarget = resolveRenameTarget(taskParsed, declOffset);
+  const sameDocEdits = declTarget?.kind === "param" ? sameDocumentEdits(taskParsed, "param", declTarget.name, "imageTag") : [];
+  const okDecl = declTarget?.kind === "param" && declTarget.name === "image-tag" && sameDocEdits.length === 2;
+  console.log(`  [${okDecl ? "PASS" : "FAIL"}] Task declaration resolves as "param"; same-doc edits cover decl + self-ref (${sameDocEdits.length})`);
+  if (!okDecl) {
+    console.log({ declTarget, sameDocEdits });
+    failures++;
+  }
+
+  // From the Pipeline task entry's params: [{name: image-tag}] binding (point of use).
+  const pipelineOffset = pipelineSource.lastIndexOf("image-tag") + 3;
+  const pipelineTarget = resolveRenameTarget(pipelineParsed, pipelineOffset);
+  const pipelineEdits =
+    pipelineTarget?.kind === "task-param" && pipelineTarget.taskAlias
+      ? taskParamReferenceEdits(pipelineParsed, pipelineTarget.taskAlias, pipelineTarget.paramName, "imageTag")
+      : [];
+  const okPipeline =
+    pipelineTarget?.kind === "task-param" &&
+    pipelineTarget.paramName === "image-tag" &&
+    pipelineTarget.taskRefName === "build-image" &&
+    pipelineTarget.taskAlias === "build" &&
+    pipelineEdits.length === 1;
+  console.log(`  [${okPipeline ? "PASS" : "FAIL"}] Pipeline task entry's params binding resolves as "task-param", scoped edit found (${pipelineEdits.length})`);
+  if (!okPipeline) {
+    console.log({ pipelineTarget, pipelineEdits });
+    failures++;
+  }
+
+  // From the TaskRun's own params: [{name: image-tag}] binding -- no taskAlias, whole doc is the binding.
+  const taskRunOffset = taskRunSource.lastIndexOf("image-tag") + 3;
+  const taskRunTarget = resolveRenameTarget(taskRunParsed, taskRunOffset);
+  const okTaskRun =
+    taskRunTarget?.kind === "task-param" &&
+    taskRunTarget.paramName === "image-tag" &&
+    taskRunTarget.taskRefName === "build-image" &&
+    taskRunTarget.taskAlias === undefined;
+  console.log(`  [${okTaskRun ? "PASS" : "FAIL"}] TaskRun's own params binding resolves as "task-param" with no taskAlias`);
+  if (!okTaskRun) {
+    console.log({ taskRunTarget });
+    failures++;
+  }
+
+  // Applying every edit together must leave a consistent result: Task's param renamed, and both
+  // bindings pointing at the new name.
+  const taskResult = applyTextEdits(taskSource, sameDocEdits);
+  const pipelineResult = applyTextEdits(pipelineSource, pipelineEdits);
+  const taskRunEdits =
+    taskRunTarget?.kind === "task-param"
+      ? taskRunParsed.symbols.params.filter((p) => p.name === "image-tag").map((p) => ({ range: p.range, newText: "imageTag" }))
+      : [];
+  const taskRunResult = applyTextEdits(taskRunSource, taskRunEdits);
+  const taskAfter = parseTektonDocument(taskResult);
+  const okApplied =
+    taskAfter?.symbols.params.some((p) => p.name === "imageTag") &&
+    pipelineResult.includes("name: imageTag") &&
+    taskRunResult.includes("name: imageTag");
+  console.log(`  [${okApplied ? "PASS" : "FAIL"}] applying all edits together: Task decl + both bindings consistently renamed`);
+  if (!okApplied) {
+    console.log({ taskResult, pipelineResult, taskRunResult });
     failures++;
   }
 }

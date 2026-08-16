@@ -53,6 +53,8 @@ export interface TaskSymbol extends NamedSymbol {
   workspaceBindings: TaskWorkspaceBinding[];
   /** this task entry's own `runAfter: [name, ...]` — bare scalar task-alias names, not `$(...)` syntax or a `{ref: name}` map */
   runAfter: RefName[];
+  /** this task entry's own `params: [{name, value}]` bindings — `name` should match a param declared by whatever `taskRefName` points at (only meaningful when using `taskRef`; an inline `taskSpec`'s params bind to its own same-document declarations instead) */
+  paramBindings: RefName[];
 }
 
 export interface TaskWorkspaceBinding {
@@ -289,13 +291,23 @@ function taskWorkspaceBindings(seq: YAMLSeq | undefined): TaskWorkspaceBinding[]
   return out;
 }
 
+/** Reads a `params: [{name, value}]` sequence's `name` fields with their ranges — the same shape as a declaring list, but only `name` matters here (a binding, not a declaration). */
+function taskParamBindings(seq: YAMLSeq | undefined): RefName[] {
+  const out: RefName[] = [];
+  forEachNamedItem(seq, (_m, name, range) => {
+    out.push({ name, range });
+  });
+  return out;
+}
+
 function taskEntries(seq: YAMLSeq | undefined): TaskSymbol[] {
   const out: TaskSymbol[] = [];
   forEachNamedItem(seq, (m, name, range) => {
     const taskRef = refNameAndRange(m, "taskRef");
     const workspaceBindings = taskWorkspaceBindings(seqOf(m.get("workspaces", true)));
     const runAfter = scalarNameList(seqOf(m.get("runAfter", true)));
-    out.push({ name, range, taskRefName: taskRef.name, taskRefNameRange: taskRef.range, workspaceBindings, runAfter });
+    const paramBindings = taskParamBindings(seqOf(m.get("params", true)));
+    out.push({ name, range, taskRefName: taskRef.name, taskRefNameRange: taskRef.range, workspaceBindings, runAfter, paramBindings });
   });
   return out;
 }

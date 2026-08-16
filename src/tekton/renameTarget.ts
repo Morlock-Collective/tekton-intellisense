@@ -12,6 +12,14 @@ export type RenameTarget =
   | { kind: "param" | "workspace" | "task-alias"; name: string; range: [number, number] }
   | { kind: "result"; name: string; range: [number, number] }
   | { kind: "task-result"; taskAlias: string; resultName: string; range: [number, number]; taskEntry: TaskSymbol }
+  /**
+   * A binding to a *different* resource's declared param: a Pipeline task
+   * entry's `params: [{name, value}]` (taskAlias set, scoped to that one
+   * entry) or a TaskRun's own top-level `spec.params` when using `taskRef`
+   * (taskAlias absent — the whole document is the one binding). Distinct
+   * from plain `"param"`, which is always a same-document declaration.
+   */
+  | { kind: "task-param"; paramName: string; range: [number, number]; taskRefName: string; taskAlias?: string }
   | { kind: "task-identity"; name: string; range: [number, number] }
   | { kind: "pipeline-identity"; name: string; range: [number, number] }
   | { kind: "template-identity"; name: string; range: [number, number] }
@@ -32,8 +40,14 @@ function inRange(range: [number, number] | undefined, offset: number): boolean {
 export function resolveRenameTarget(parsed: ParsedTektonDoc, offset: number): RenameTarget | undefined {
   const { symbols, text } = parsed;
 
+  // A TaskRun using `taskRef` (not an inline taskSpec) has its own spec.params as a *binding* to
+  // the referenced Task's declared params, not a declaration of its own -- same relationship as a
+  // Pipeline task entry's params[] below, just without a wrapping task-entry alias.
+  const taskRunBindingRef = symbols.kind === "TaskRun" ? symbols.taskRefName : undefined;
   for (const p of symbols.params) {
-    if (inRange(p.range, offset)) return { kind: "param", name: p.name, range: p.range! };
+    if (!inRange(p.range, offset)) continue;
+    if (taskRunBindingRef) return { kind: "task-param", paramName: p.name, range: p.range!, taskRefName: taskRunBindingRef };
+    return { kind: "param", name: p.name, range: p.range! };
   }
   for (const w of symbols.workspaces) {
     if (inRange(w.range, offset)) return { kind: "workspace", name: w.name, range: w.range! };
@@ -45,6 +59,13 @@ export function resolveRenameTarget(parsed: ParsedTektonDoc, offset: number): Re
     if (inRange(t.range, offset)) return { kind: "task-alias", name: t.name, range: t.range! };
     if (t.taskRefName && inRange(t.taskRefNameRange, offset)) {
       return { kind: "task-identity", name: t.taskRefName, range: t.taskRefNameRange! };
+    }
+    if (t.taskRefName) {
+      for (const pb of t.paramBindings) {
+        if (inRange(pb.range, offset)) {
+          return { kind: "task-param", paramName: pb.name, range: pb.range!, taskRefName: t.taskRefName, taskAlias: t.name };
+        }
+      }
     }
     for (const wb of t.workspaceBindings) {
       if (wb.workspaceName && inRange(wb.workspaceNameRange, offset)) {
@@ -217,6 +238,17 @@ export function taskResultReferenceEdits(parsed: ParsedTektonDoc, taskAlias: str
     if (ref.kind !== "task-result" || ref.name !== taskAlias || ref.resultName !== resultName) continue;
     if (ref.resultNameStart === undefined || ref.resultNameEnd === undefined) continue;
     edits.push({ range: [ref.resultNameStart, ref.resultNameEnd], newText: newName });
+  }
+  return edits;
+}
+
+/** Every `params: [{name, value}]` binding in `parsed`'s task entry named `taskAlias` whose `name` matches one specific param — the plain-field counterpart to {@link taskResultReferenceEdits}. */
+export function taskParamReferenceEdits(parsed: ParsedTektonDoc, taskAlias: string, paramName: string, newName: string): TextEdit[] {
+  const edits: TextEdit[] = [];
+  const taskEntry = parsed.symbols.tasks.find((t) => t.name === taskAlias);
+  if (!taskEntry) return edits;
+  for (const pb of taskEntry.paramBindings) {
+    if (pb.name === paramName && pb.range) edits.push({ range: pb.range, newText: newName });
   }
   return edits;
 }

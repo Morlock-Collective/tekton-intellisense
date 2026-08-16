@@ -7,6 +7,7 @@ import {
   sameDocumentEdits,
   sameDocumentResultEdits,
   taskResultReferenceEdits,
+  taskParamReferenceEdits,
   taskRefIdentityEdits,
   pipelineRefIdentityEdits,
   templateRefIdentityEdits,
@@ -124,11 +125,32 @@ export class TektonRenameProvider implements vscode.RenameProvider {
     const edit = new vscode.WorkspaceEdit();
 
     switch (target.kind) {
-      case "param":
       case "workspace":
       case "task-alias": {
         assertNoLocalCollision(parsed, target.kind, target.name, newName);
         addEdits(edit, document.uri, parsed, sameDocumentEdits(parsed, target.kind, target.name, newName));
+        return edit;
+      }
+
+      case "param": {
+        assertNoLocalCollision(parsed, "param", target.name, newName);
+        addEdits(edit, document.uri, parsed, sameDocumentEdits(parsed, "param", target.name, newName));
+        // Only a Task/ClusterTask's own declared param can be bound from elsewhere (via taskRef) --
+        // a Pipeline's own param has no such cross-file binding in scope here (see task-param below).
+        if (parsed.symbols.kind === "Task" || parsed.symbols.kind === "ClusterTask") {
+          await this.addCrossFileParamEdits(edit, parsed, target.name, newName);
+        }
+        return edit;
+      }
+
+      case "task-param": {
+        // Invoked on a Pipeline task entry's or TaskRun's own params: [{name, value}] binding --
+        // resolve the real Task the binding belongs to. Reference-resolved, so an ambiguous
+        // taskRefName must reject outright (see resolveUnambiguous).
+        const record = resolveUnambiguous(this.workspaceIndex.lookupAllTaskRecords(target.taskRefName), target.taskRefName, "Task");
+        assertNoLocalCollision(record.parsed, "param", target.paramName, newName);
+        addEdits(edit, record.uri, record.parsed, sameDocumentEdits(record.parsed, "param", target.paramName, newName));
+        await this.addCrossFileParamEdits(edit, record.parsed, target.paramName, newName);
         return edit;
       }
 
@@ -326,6 +348,50 @@ export class TektonRenameProvider implements vscode.RenameProvider {
       for (const taskEntry of parsed.symbols.tasks) {
         if (taskEntry.taskRefName !== taskName) continue;
         addEdits(edit, uri, parsed, taskResultReferenceEdits(parsed, taskEntry.name, resultName, newName));
+      }
+    }
+  }
+
+  /**
+   * Propagates a Task's declared param rename into every `params:
+   * [{name, value}]` binding pointing at it via `taskRef` — a Pipeline
+   * task entry's (scoped to that one entry) and a TaskRun's own top-level
+   * one. Mirrors {@link addCrossFileResultEdits}; doesn't cover a Pipeline
+   * task entry using an inline `taskSpec` instead of `taskRef` (its
+   * params bind to its own same-document declaration, a different case),
+   * nor PipelineRun/Pipeline params (same shape one level up, not yet
+   * built).
+   */
+  private async addCrossFileParamEdits(
+    edit: vscode.WorkspaceEdit,
+    taskParsed: ParsedTektonDoc,
+    paramName: string,
+    newName: string
+  ): Promise<void> {
+    const taskName = taskParsed.symbols.metadataName;
+    if (!taskName) return;
+
+    const sameName = this.workspaceIndex.lookupAllTaskRecords(taskName);
+    if (sameName.length > 1) {
+      void vscode.window.showWarningMessage(
+        `Tekton Intellisense: "${taskName}" is declared by ${sameName.length} different Task files — only this file's own param and $(params.${paramName}...) uses were updated. Update param bindings in Pipelines/TaskRuns by hand if needed.`
+      );
+      return;
+    }
+
+    const pipelines = await findWorkspaceDocs(["Pipeline"]);
+    for (const { uri, parsed } of pipelines) {
+      for (const taskEntry of parsed.symbols.tasks) {
+        if (taskEntry.taskRefName !== taskName) continue;
+        addEdits(edit, uri, parsed, taskParamReferenceEdits(parsed, taskEntry.name, paramName, newName));
+      }
+    }
+
+    const taskRuns = await findWorkspaceDocs(["TaskRun"]);
+    for (const { uri, parsed } of taskRuns) {
+      if (parsed.symbols.taskRefName !== taskName) continue;
+      for (const p of parsed.symbols.params) {
+        if (p.name === paramName && p.range) addEdits(edit, uri, parsed, [{ range: p.range, newText: newName }]);
       }
     }
   }
