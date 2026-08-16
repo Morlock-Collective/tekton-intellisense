@@ -166,6 +166,21 @@ export class TektonRenameProvider implements vscode.RenameProvider {
         return edit;
       }
 
+      case "pipeline-workspace": {
+        // Invoked on a PipelineRun's own top-level workspaces: [{name, ...}] binding -- resolve
+        // the real Pipeline the binding belongs to, same as task-param does for a Task. Reference-
+        // resolved, so an ambiguous pipelineRefName must reject outright (see resolveUnambiguous).
+        const record = resolveUnambiguous(
+          this.workspaceIndex.lookupAllPipelineRecords(target.pipelineRefName),
+          target.pipelineRefName,
+          "Pipeline"
+        );
+        assertNoLocalCollision(record.parsed, "workspace", target.workspaceName, newName);
+        addEdits(edit, record.uri, record.parsed, sameDocumentEdits(record.parsed, "workspace", target.workspaceName, newName));
+        await this.addCrossFilePipelineWorkspaceEdits(edit, record.parsed, target.workspaceName, newName);
+        return edit;
+      }
+
       case "result": {
         assertNoLocalCollision(parsed, "result", target.name, newName);
         addEdits(edit, document.uri, parsed, sameDocumentResultEdits(parsed, target.name, newName));

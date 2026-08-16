@@ -20,6 +20,17 @@ export type RenameTarget =
    * from plain `"param"`, which is always a same-document declaration.
    */
   | { kind: "task-param"; paramName: string; range: [number, number]; taskRefName: string; taskAlias?: string }
+  /**
+   * A binding to a *different* resource's declared workspace: a
+   * PipelineRun's own top-level `spec.workspaces: [{name, ...}]` entry,
+   * which binds by giving an entry the same `name` as one the Pipeline
+   * declares (via `pipelineRef`) rather than through a nested `workspace:`
+   * field the way a Pipeline task entry's binding does. Distinct from
+   * plain `"workspace"`, which is always a same-document declaration (or,
+   * for a Pipeline task entry's `workspace:` field, a same-document
+   * binding — see `sameDocumentEdits`).
+   */
+  | { kind: "pipeline-workspace"; workspaceName: string; range: [number, number]; pipelineRefName: string }
   | { kind: "task-identity"; name: string; range: [number, number] }
   | { kind: "pipeline-identity"; name: string; range: [number, number] }
   | { kind: "template-identity"; name: string; range: [number, number] }
@@ -49,8 +60,16 @@ export function resolveRenameTarget(parsed: ParsedTektonDoc, offset: number): Re
     if (taskRunBindingRef) return { kind: "task-param", paramName: p.name, range: p.range!, taskRefName: taskRunBindingRef };
     return { kind: "param", name: p.name, range: p.range! };
   }
+  // A PipelineRun using `pipelineRef` has its own top-level spec.workspaces as a *binding* to the
+  // referenced Pipeline's declared workspaces (matched by name), not a declaration of its own --
+  // same relationship task-param has to a Task's declared params, one level up.
+  const pipelineRunBindingRef = symbols.kind === "PipelineRun" ? symbols.pipelineRefName : undefined;
   for (const w of symbols.workspaces) {
-    if (inRange(w.range, offset)) return { kind: "workspace", name: w.name, range: w.range! };
+    if (!inRange(w.range, offset)) continue;
+    if (pipelineRunBindingRef) {
+      return { kind: "pipeline-workspace", workspaceName: w.name, range: w.range!, pipelineRefName: pipelineRunBindingRef };
+    }
+    return { kind: "workspace", name: w.name, range: w.range! };
   }
   for (const r of symbols.results) {
     if (inRange(r.range, offset)) return { kind: "result", name: r.name, range: r.range! };

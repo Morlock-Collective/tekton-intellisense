@@ -146,6 +146,16 @@ export class TektonReferenceProvider implements vscode.ReferenceProvider {
         return dedupe(locations);
       }
 
+      case "pipeline-workspace": {
+        // Read-only, so an ambiguous pipelineRefName isn't a reason to hold back -- every matching
+        // Pipeline's references are searched and merged, unlike rename.ts's reject-on-ambiguity.
+        for (const record of this.workspaceIndex.lookupAllPipelineRecords(target.pipelineRefName)) {
+          addSameDocRefs(locations, record.uri, record.parsed, "workspace", target.workspaceName, context.includeDeclaration);
+          await addCrossFilePipelineWorkspaceReferences(locations, record.parsed, target.workspaceName);
+        }
+        return dedupe(locations);
+      }
+
       case "result": {
         addResultReferences(locations, document.uri, parsed, target.name, context.includeDeclaration);
         await addCrossFileResultReferences(locations, parsed, target.name);
