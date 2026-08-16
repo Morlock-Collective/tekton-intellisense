@@ -7,6 +7,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 - "Bind All Parameters to Environment Variables" command
 
+### Fixed
+- Workspace rename didn't update or work from task-level `workspace:` bindings
+
 ## [0.2.1] - 2026-08-16
 
 ### Fixed
