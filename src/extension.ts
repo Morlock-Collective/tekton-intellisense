@@ -44,13 +44,13 @@ function refreshDiagnostics(document: vscode.TextDocument, workspaceIndex: Tekto
 function refreshActiveEditorState(editor: vscode.TextEditor | undefined): void {
   if (!editor || !looksLikeYaml(editor.document)) {
     statusBar.update(undefined, false);
-    void vscode.commands.executeCommand("setContext", "tektonAid.active", false);
+    void vscode.commands.executeCommand("setContext", "tektonIntellisense.active", false);
     if (editor) clearDecorations(editor);
     return;
   }
   const parsed = parseTektonDocument(editor.document.getText());
   statusBar.update(parsed?.symbols.kind, parsed?.isHelmTemplated ?? false);
-  void vscode.commands.executeCommand("setContext", "tektonAid.active", !!parsed);
+  void vscode.commands.executeCommand("setContext", "tektonIntellisense.active", !!parsed);
   updateDecorations(editor, parsed);
 }
 
@@ -95,7 +95,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.workspace.onDidCloseTextDocument((doc) => diagnosticCollection.delete(doc.uri)),
     vscode.workspace.onDidChangeConfiguration((e) => {
-      if (e.affectsConfiguration("tektonAid")) {
+      if (e.affectsConfiguration("tektonIntellisense")) {
         for (const editor of vscode.window.visibleTextEditors) {
           refreshDiagnostics(editor.document, workspaceIndex);
         }

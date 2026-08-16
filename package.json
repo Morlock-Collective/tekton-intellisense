@@ -68,35 +68,35 @@
       "editor/context": [
         {
           "command": "tekton-intellisense.bindParamToEnv",
-          "when": "tektonAid.active",
-          "group": "tektonAid"
+          "when": "tektonIntellisense.active",
+          "group": "tektonIntellisense"
         },
         {
           "command": "tekton-intellisense.addTask",
-          "when": "tektonAid.active",
-          "group": "tektonAid"
+          "when": "tektonIntellisense.active",
+          "group": "tektonIntellisense"
         },
         {
           "command": "tekton-intellisense.addConditional",
-          "when": "tektonAid.active",
-          "group": "tektonAid"
+          "when": "tektonIntellisense.active",
+          "group": "tektonIntellisense"
         },
         {
           "command": "tekton-intellisense.addParameter",
-          "when": "tektonAid.active",
-          "group": "tektonAid"
+          "when": "tektonIntellisense.active",
+          "group": "tektonIntellisense"
         },
         {
           "command": "tekton-intellisense.editTaskScript",
-          "when": "tektonAid.active",
-          "group": "tektonAid"
+          "when": "tektonIntellisense.active",
+          "group": "tektonIntellisense"
         }
       ]
     },
     "configuration": {
       "title": "Tekton Intellisense",
       "properties": {
-        "tektonAid.enableDiagnostics": {
+        "tektonIntellisense.enableDiagnostics": {
           "type": "boolean",
           "default": true,
           "description": "Validate $(...) references against declared params/workspaces/results/tasks."

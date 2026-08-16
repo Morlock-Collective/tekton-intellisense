@@ -270,7 +270,7 @@ function checkRef(
 }
 
 export function computeDiagnostics(document: vscode.TextDocument, workspaceIndex: TektonWorkspaceIndex): vscode.Diagnostic[] {
-  const config = vscode.workspace.getConfiguration("tektonAid");
+  const config = vscode.workspace.getConfiguration("tektonIntellisense");
   if (!config.get<boolean>("enableDiagnostics", true)) return [];
 
   const source = document.getText();
