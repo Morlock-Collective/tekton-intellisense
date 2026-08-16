@@ -145,6 +145,12 @@ function checkTaskParamBindings(document: vscode.TextDocument, symbols: TektonSy
  * entry using an inline `taskSpec` instead of `taskRef` — its params bind
  * to its own same-document declaration, a different case with its own
  * required/provided set that doesn't need cross-file resolution.
+ *
+ * One diagnostic per missing param, not one aggregating the whole list —
+ * `diagnostic.code` carries a single `taskRefName`/`paramName` pair
+ * (`add-task-param:<taskRefName>:<paramName>`) so `codeActions.ts` can
+ * offer quick fixes (add the binding here, or add a default on the Task's
+ * own declaration) for that one param specifically.
  */
 function checkTaskParamWiring(document: vscode.TextDocument, symbols: TektonSymbols, workspaceIndex: TektonWorkspaceIndex): vscode.Diagnostic[] {
   const diagnostics: vscode.Diagnostic[] = [];
@@ -156,16 +162,17 @@ function checkTaskParamWiring(document: vscode.TextDocument, symbols: TektonSymb
 
     const provided = new Set(providedNames);
     const missing = resolved.params.filter((p) => p.default === undefined && !provided.has(p.name));
-    if (missing.length === 0) return;
 
-    const names = missing.map((p) => `"${p.name}"`).join(", ");
-    const diagnostic = new vscode.Diagnostic(
-      new vscode.Range(offsetToPosition(document, taskRefNameRange[0]), offsetToPosition(document, taskRefNameRange[1])),
-      `Task "${taskRefName}" requires param${missing.length > 1 ? "s" : ""} ${names} with no default, but this taskRef doesn't provide ${missing.length > 1 ? "them" : "it"}.`,
-      vscode.DiagnosticSeverity.Warning
-    );
-    diagnostic.source = DIAGNOSTIC_SOURCE;
-    diagnostics.push(diagnostic);
+    for (const param of missing) {
+      const diagnostic = new vscode.Diagnostic(
+        new vscode.Range(offsetToPosition(document, taskRefNameRange[0]), offsetToPosition(document, taskRefNameRange[1])),
+        `Task "${taskRefName}" requires param "${param.name}" with no default, but this taskRef doesn't provide it.`,
+        vscode.DiagnosticSeverity.Warning
+      );
+      diagnostic.source = DIAGNOSTIC_SOURCE;
+      diagnostic.code = `add-task-param:${taskRefName}:${param.name}`;
+      diagnostics.push(diagnostic);
+    }
   };
 
   for (const task of symbols.tasks) {

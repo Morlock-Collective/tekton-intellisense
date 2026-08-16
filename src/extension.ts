@@ -139,7 +139,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.languages.registerCodeActionsProvider(
       { pattern: "**/*.{yaml,yml}" },
-      new TektonRefCodeActionProvider(),
+      new TektonRefCodeActionProvider(workspaceIndex),
       TektonRefCodeActionProvider.metadata
     )
   );

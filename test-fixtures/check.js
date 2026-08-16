@@ -14,6 +14,7 @@ const {
   stepAndSidecarEntryMaps,
   findEnclosingStepEntry,
   findSeqIn,
+  findSpecMap,
   trimTrailingNewline,
 } = require("../out/tekton/model");
 const { findParamRefs } = require("../out/tekton/paramRefs");
@@ -1786,6 +1787,133 @@ spec:
   const okUnresolved = unresolvedMissing === undefined;
   console.log(`  [${okUnresolved ? "PASS" : "FAIL"}] unresolved taskRef -> skipped (undefined), not a false "missing" report`);
   if (!okUnresolved) failures++;
+}
+
+/** Mirrors codeActions.ts's addTaskParamBindingFix: adds `paramName` to a Pipeline task entry's or TaskRun's own params: binding. */
+function simulateAddTaskParamBinding(source, taskAlias, paramName) {
+  const parsed = parseTektonDocument(source);
+  const owner =
+    parsed.symbols.kind === "TaskRun"
+      ? (() => {
+          const target = resolveParamsTarget(parsed);
+          return target?.shape === "binding" ? target : undefined;
+        })()
+      : (() => {
+          const entryMap = pipelineTaskEntryMaps(parsed).find((m) => m.get("name") === taskAlias);
+          if (!entryMap?.range) return undefined;
+          return { ownerMap: entryMap, ownerMapEnd: entryMap.range[1], keyIndent: indentAtOffset(source, entryMap.range[0]) + "  " };
+        })();
+  if (!owner) return { owner: undefined };
+
+  const itemLines = [`- name: ${paramName}`, `  value: ""`];
+  const seq = findSeqIn(owner.ownerMap, "params");
+  let offset, text;
+  if (seq?.range) {
+    const lastItem = seq.items[seq.items.length - 1];
+    offset = trimTrailingNewline(parsed.text, lastItem?.range ? lastItem.range[1] : seq.range[1]);
+    const itemIndent = lastItem ? indentAtOffset(source, seq.range[0]) : owner.keyIndent + "  ";
+    text = blockAfterText(itemLines, itemIndent);
+  } else {
+    offset = trimTrailingNewline(parsed.text, owner.ownerMapEnd);
+    text = blockAfterText(["params:", ...itemLines.map((l) => "  " + l)], owner.keyIndent);
+  }
+  return { owner, result: source.slice(0, offset) + text + source.slice(offset) };
+}
+
+/** Mirrors codeActions.ts's addTaskParamDefaultFix: adds `default: ""` to a Task's own declaration of `paramName`. */
+function simulateAddTaskParamDefault(taskSource, paramName) {
+  const parsed = parseTektonDocument(taskSource);
+  const specMap = findSpecMap(parsed.doc);
+  const paramsSeq = specMap && findSeqIn(specMap, "params");
+  const paramItem = paramsSeq?.items.find((item) => YAML.isMap(item) && YAML.isScalar(item.get("name", true)) && item.get("name", true).value === paramName);
+  if (!paramItem?.range) return { paramItem: undefined };
+
+  const offset = trimTrailingNewline(parsed.text, paramItem.range[1]);
+  // paramItem's own range starts on its "name:" key, not its "- " marker -- indentAtOffset (whole
+  // line's leading whitespace) would stop short by the marker's width, same gotcha model.ts's own
+  // indentAtOffset doc comment calls out. Column padding instead, mirroring codeActions.ts's columnIndent.
+  const lineStart = parsed.text.lastIndexOf("\n", paramItem.range[0] - 1) + 1;
+  const indent = " ".repeat(paramItem.range[0] - lineStart);
+  const text = blockAfterText([`default: ""`], indent);
+  return { paramItem, result: taskSource.slice(0, offset) + text + taskSource.slice(offset) };
+}
+
+console.log("\nmissing-task-param quick fix simulation (add binding, or add a default on the Task):");
+{
+  const taskSource = `apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: needs-two-params
+spec:
+  params:
+    - name: image-tag
+      type: string
+    - name: region
+      type: string
+      default: us-east-1
+  steps:
+    - name: build
+      script: echo $(params.image-tag) $(params.region)
+`;
+  const pipelineSource = `apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: p
+spec:
+  tasks:
+    - name: incomplete
+      taskRef:
+        name: needs-two-params
+      params:
+        - name: region
+          value: eu-west-1
+`;
+  const taskRunSource = `apiVersion: tekton.dev/v1
+kind: TaskRun
+metadata:
+  name: run
+spec:
+  taskRef:
+    name: needs-two-params
+`;
+
+  // "Add the binding" fix: Pipeline task entry already has a params: list -- append to it.
+  {
+    const { owner, result } = simulateAddTaskParamBinding(pipelineSource, "incomplete", "image-tag");
+    const after = owner && YAML.parse(result);
+    const task = after?.spec.tasks.find((t) => t.name === "incomplete");
+    const ok = owner !== undefined && task?.params?.length === 2 && task.params.some((p) => p.name === "image-tag" && p.value === "");
+    console.log(`  [${ok ? "PASS" : "FAIL"}] Pipeline task entry: "image-tag" appended to its existing params: list`);
+    if (!ok) {
+      console.log(result);
+      failures++;
+    }
+  }
+
+  // Same fix, but the TaskRun has no params: list at all yet -- must create it.
+  {
+    const { owner, result } = simulateAddTaskParamBinding(taskRunSource, undefined, "image-tag");
+    const after = owner && YAML.parse(result);
+    const ok = owner !== undefined && after?.spec.params?.length === 1 && after.spec.params[0].name === "image-tag";
+    console.log(`  [${ok ? "PASS" : "FAIL"}] TaskRun with no params: yet: fresh params: [image-tag] created`);
+    if (!ok) {
+      console.log(result);
+      failures++;
+    }
+  }
+
+  // "Add a default" fix: edits the Task's own declaration instead, leaving the binding untouched.
+  {
+    const { paramItem, result } = simulateAddTaskParamDefault(taskSource, "image-tag");
+    const after = paramItem && YAML.parse(result);
+    const param = after?.spec.params.find((p) => p.name === "image-tag");
+    const ok = paramItem !== undefined && param?.default === "" && after.spec.params.find((p) => p.name === "region").default === "us-east-1";
+    console.log(`  [${ok ? "PASS" : "FAIL"}] Task's own declaration: default: "" added to "image-tag", "region"'s own default untouched`);
+    if (!ok) {
+      console.log(result);
+      failures++;
+    }
+  }
 }
 
 console.log("\nrename: cross-file TriggerTemplate identity (template.ref, EventListener + standalone Trigger):");

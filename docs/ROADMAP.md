@@ -230,7 +230,15 @@ a missing required param until the PipelineRun/TaskRun actually runs, so
 it's easy to only discover by watching one fail. Skipped entirely when the
 taskRef doesn't resolve at all (no check flags that on its own today) or
 for a Pipeline task entry using an inline `taskSpec` instead of `taskRef`
-(binds to its own same-document declaration, a different case).
+(binds to its own same-document declaration, a different case). Emits one
+diagnostic per missing param (not one aggregating the whole list), each
+carrying a `taskRefName`/`paramName` pair in its `code` so
+`codeActions.ts` can offer two quick fixes: add the binding right here
+(pre-filled with a placeholder value to fill in), or add a `default:` to
+the Task's own declaration instead — satisfying every binding at once
+rather than just this one, cross-file and even when that file isn't open
+(positions built from the resolved record's own `lineCounter`, not the
+current document's).
 
 ## Notable bugs found and fixed along the way
 
