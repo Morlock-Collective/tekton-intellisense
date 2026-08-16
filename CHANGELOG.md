@@ -4,8 +4,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-17
+
 ### Added
 - Multi-document YAML support — every `---`-separated resource in a file is now recognized (diagnostics, highlighting, hover, completion, go to definition, rename, find references, editing commands), not just the first
+
+### Fixed
+- A bunch of the renaming operations not working consistently, including workspaces, taskRef parameters, trigger template parameters, trigger binding names, etc.
 
 ## [0.3.0] - 2026-08-16
 
