@@ -1,0 +1,257 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://tekton.dev/schema/v1beta1/resolutionrequest.json",
+  "title": "Tekton ResolutionRequest",
+  "description": "JSON schema for Tekton ResolutionRequest v1beta1",
+  "type": "object",
+  "properties": {
+    "apiVersion": {
+      "type": "string",
+      "enum": [
+        "resolution.tekton.dev/v1beta1"
+      ]
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "ResolutionRequest"
+      ]
+    },
+    "metadata": {
+      "$ref": "#/definitions/ObjectMeta"
+    },
+    "spec": {
+      "description": "Spec holds the information for the request part of the resource request.",
+      "type": "object",
+      "properties": {
+        "params": {
+          "description": "Parameters are the runtime attributes passed to\nthe resolver to help it figure out how to resolve the\nresource being requested. For example: repo URL, commit SHA,\npath to file, the kind of authentication to leverage, etc.",
+          "type": "array",
+          "items": {
+            "description": "Param declares an ParamValues to use for the parameter called name.",
+            "type": "object",
+            "required": [
+              "name",
+              "value"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "value": {
+                "x-kubernetes-preserve-unknown-fields": true
+              }
+            }
+          },
+          "x-kubernetes-list-type": "atomic"
+        },
+        "url": {
+          "description": "URL is the runtime url passed to the resolver\nto help it figure out how to resolver the resource being\nrequested.\nThis is currently at an ALPHA stability level and subject to\nalpha API compatibility policies.",
+          "type": "string"
+        }
+      }
+    },
+    "status": {
+      "description": "Status communicates the state of the request and, ultimately,\nthe content of the resolved resource.",
+      "type": "object",
+      "required": [
+        "data",
+        "refSource",
+        "source"
+      ],
+      "properties": {
+        "annotations": {
+          "description": "Annotations is additional Status fields for the Resource to save some\nadditional State as well as convey more information to the user. This is\nroughly akin to Annotations on any k8s resource, just the reconciler conveying\nricher information outwards.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "conditions": {
+          "description": "Conditions the latest available observations of a resource's current state.",
+          "type": "array",
+          "items": {
+            "description": "Condition defines a readiness condition for a Knative resource.\nSee: https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#typical-status-properties",
+            "type": "object",
+            "required": [
+              "status",
+              "type"
+            ],
+            "properties": {
+              "lastTransitionTime": {
+                "description": "LastTransitionTime is the last time the condition transitioned from one status to another.\nWe use VolatileTime in place of metav1.Time to exclude this from creating equality.Semantic\ndifferences (all other things held constant).",
+                "type": "string"
+              },
+              "message": {
+                "description": "A human readable message indicating details about the transition.",
+                "type": "string"
+              },
+              "reason": {
+                "description": "The reason for the condition's last transition.",
+                "type": "string"
+              },
+              "severity": {
+                "description": "Severity with which to treat failures of this type of condition.\nWhen this is not specified, it defaults to Error.",
+                "type": "string"
+              },
+              "status": {
+                "description": "Status of the condition, one of True, False, Unknown.",
+                "type": "string"
+              },
+              "type": {
+                "description": "Type of condition.",
+                "type": "string"
+              }
+            }
+          }
+        },
+        "data": {
+          "description": "Data is a string representation of the resolved content\nof the requested resource in-lined into the ResolutionRequest\nobject.",
+          "type": "string"
+        },
+        "observedGeneration": {
+          "description": "ObservedGeneration is the 'Generation' of the Service that\nwas last processed by the controller.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "refSource": {
+          "description": "RefSource is the source reference of the remote data that records the url, digest\nand the entrypoint.",
+          "x-kubernetes-preserve-unknown-fields": true
+        },
+        "source": {
+          "description": "Deprecated: Use RefSource instead",
+          "x-kubernetes-preserve-unknown-fields": true
+        }
+      }
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind"
+  ],
+  "definitions": {
+    "ObjectMeta": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Name must be unique within a namespace"
+        },
+        "namespace": {
+          "type": "string",
+          "description": "Namespace defines the space within which each name must be unique"
+        },
+        "labels": {
+          "type": "object",
+          "description": "Map of string keys and values that can be used to organize and categorize objects",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "annotations": {
+          "type": "object",
+          "description": "Annotations is an unstructured key value map stored with a resource",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "uid": {
+          "type": "string",
+          "description": "UID is the unique in time and space value for this object"
+        },
+        "resourceVersion": {
+          "type": "string",
+          "description": "An opaque value that represents the internal version of this object"
+        },
+        "generation": {
+          "type": "integer",
+          "description": "A sequence number representing a specific generation of the desired state"
+        },
+        "creationTimestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "CreationTimestamp is a timestamp representing the server time when this object was created"
+        },
+        "deletionTimestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "DeletionTimestamp is RFC 3339 date and time at which this resource will be deleted"
+        },
+        "finalizers": {
+          "type": "array",
+          "description": "Must be empty before the object is deleted from the registry",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "LocalObjectReference": {
+      "type": "object",
+      "description": "LocalObjectReference contains enough information to let you locate the referenced object inside the same namespace",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Name of the referent"
+        }
+      }
+    },
+    "PodSecurityContext": {
+      "type": "object",
+      "description": "PodSecurityContext holds pod-level security attributes and common container settings",
+      "properties": {
+        "runAsUser": {
+          "type": "integer",
+          "description": "The UID to run the entrypoint of the container process"
+        },
+        "runAsGroup": {
+          "type": "integer",
+          "description": "The GID to run the entrypoint of the container process"
+        },
+        "runAsNonRoot": {
+          "type": "boolean",
+          "description": "Indicates that the container must run as a non-root user"
+        },
+        "fsGroup": {
+          "type": "integer",
+          "description": "A special supplemental group that applies to all containers in a pod"
+        }
+      }
+    },
+    "Toleration": {
+      "type": "object",
+      "description": "The pod this Toleration is attached to tolerates any taint that matches the triple <key,value,effect>",
+      "properties": {
+        "key": {
+          "type": "string",
+          "description": "Key is the taint key that the toleration applies to"
+        },
+        "operator": {
+          "type": "string",
+          "description": "Operator represents a key's relationship to the value",
+          "enum": [
+            "Exists",
+            "Equal"
+          ]
+        },
+        "value": {
+          "type": "string",
+          "description": "Value is the taint value the toleration matches to"
+        },
+        "effect": {
+          "type": "string",
+          "description": "Effect indicates the taint effect to match",
+          "enum": [
+            "NoSchedule",
+            "PreferNoSchedule",
+            "NoExecute"
+          ]
+        },
+        "tolerationSeconds": {
+          "type": "integer",
+          "description": "TolerationSeconds represents the period of time the toleration tolerates the taint"
+        }
+      }
+    }
+  }
+}

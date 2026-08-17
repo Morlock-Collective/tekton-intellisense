@@ -1,0 +1,390 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://tekton.dev/schema/v1beta1/trigger.json",
+  "title": "Tekton Trigger",
+  "description": "JSON schema for Tekton Trigger v1beta1",
+  "type": "object",
+  "properties": {
+    "apiVersion": {
+      "type": "string",
+      "enum": [
+        "triggers.tekton.dev/v1beta1"
+      ]
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "Trigger"
+      ]
+    },
+    "metadata": {
+      "$ref": "#/definitions/ObjectMeta"
+    },
+    "spec": {
+      "description": "TriggerSpec represents a connection between TriggerSpecBinding and TriggerSpecTemplate; bindings provide extracted values for the template to then create resources from.",
+      "type": "object",
+      "required": [
+        "bindings",
+        "template"
+      ],
+      "properties": {
+        "bindings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/TriggerSpecBinding"
+          }
+        },
+        "template": {
+          "$ref": "#/definitions/TriggerSpecTemplate"
+        },
+        "name": {
+          "type": "string"
+        },
+        "interceptors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/TriggerInterceptor"
+          }
+        },
+        "serviceAccountName": {
+          "type": "string",
+          "description": "ServiceAccountName optionally associates credentials with this trigger; unlike EventListeners, this should be scoped to the same namespace as the Trigger itself."
+        }
+      }
+    },
+    "status": {}
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "spec"
+  ],
+  "definitions": {
+    "ObjectMeta": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Name must be unique within a namespace"
+        },
+        "namespace": {
+          "type": "string",
+          "description": "Namespace defines the space within which each name must be unique"
+        },
+        "labels": {
+          "type": "object",
+          "description": "Map of string keys and values that can be used to organize and categorize objects",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "annotations": {
+          "type": "object",
+          "description": "Annotations is an unstructured key value map stored with a resource",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "uid": {
+          "type": "string",
+          "description": "UID is the unique in time and space value for this object"
+        },
+        "resourceVersion": {
+          "type": "string",
+          "description": "An opaque value that represents the internal version of this object"
+        },
+        "generation": {
+          "type": "integer",
+          "description": "A sequence number representing a specific generation of the desired state"
+        },
+        "creationTimestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "CreationTimestamp is a timestamp representing the server time when this object was created"
+        },
+        "deletionTimestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "DeletionTimestamp is RFC 3339 date and time at which this resource will be deleted"
+        },
+        "finalizers": {
+          "type": "array",
+          "description": "Must be empty before the object is deleted from the registry",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "LocalObjectReference": {
+      "type": "object",
+      "description": "LocalObjectReference contains enough information to let you locate the referenced object inside the same namespace",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Name of the referent"
+        }
+      }
+    },
+    "PodSecurityContext": {
+      "type": "object",
+      "description": "PodSecurityContext holds pod-level security attributes and common container settings",
+      "properties": {
+        "runAsUser": {
+          "type": "integer",
+          "description": "The UID to run the entrypoint of the container process"
+        },
+        "runAsGroup": {
+          "type": "integer",
+          "description": "The GID to run the entrypoint of the container process"
+        },
+        "runAsNonRoot": {
+          "type": "boolean",
+          "description": "Indicates that the container must run as a non-root user"
+        },
+        "fsGroup": {
+          "type": "integer",
+          "description": "A special supplemental group that applies to all containers in a pod"
+        }
+      }
+    },
+    "Toleration": {
+      "type": "object",
+      "description": "The pod this Toleration is attached to tolerates any taint that matches the triple <key,value,effect>",
+      "properties": {
+        "key": {
+          "type": "string",
+          "description": "Key is the taint key that the toleration applies to"
+        },
+        "operator": {
+          "type": "string",
+          "description": "Operator represents a key's relationship to the value",
+          "enum": [
+            "Exists",
+            "Equal"
+          ]
+        },
+        "value": {
+          "type": "string",
+          "description": "Value is the taint value the toleration matches to"
+        },
+        "effect": {
+          "type": "string",
+          "description": "Effect indicates the taint effect to match",
+          "enum": [
+            "NoSchedule",
+            "PreferNoSchedule",
+            "NoExecute"
+          ]
+        },
+        "tolerationSeconds": {
+          "type": "integer",
+          "description": "TolerationSeconds represents the period of time the toleration tolerates the taint"
+        }
+      }
+    },
+    "TriggerSpecBinding": {
+      "description": "TriggerSpecBinding refers to a particular TriggerBinding resource, or embeds a name/value pair directly.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Name is the name of the binding param. Mutually exclusive with ref."
+        },
+        "value": {
+          "type": "string",
+          "description": "Value is the value of the binding param. Can contain JSONPath. Required if name is also specified."
+        },
+        "ref": {
+          "type": "string",
+          "description": "Ref is a reference to a TriggerBinding kind. Mutually exclusive with name."
+        },
+        "kind": {
+          "type": "string",
+          "description": "Kind can only be provided if ref is also provided. Defaults to TriggerBinding.",
+          "enum": [
+            "TriggerBinding",
+            "ClusterTriggerBinding"
+          ],
+          "default": "TriggerBinding"
+        },
+        "apiversion": {
+          "type": "string",
+          "description": "APIVersion of the binding ref."
+        }
+      }
+    },
+    "TriggerSpecTemplate": {
+      "description": "TriggerSpecTemplate refers to a particular TriggerTemplate resource, by ref or (rarely) an inline spec.",
+      "type": "object",
+      "properties": {
+        "ref": {
+          "type": "string",
+          "description": "Ref is the name of the referenced TriggerTemplate."
+        },
+        "apiversion": {
+          "type": "string"
+        },
+        "spec": {
+          "$ref": "#/definitions/TriggerTemplateSpec"
+        }
+      }
+    },
+    "TriggerTemplateSpec": {
+      "description": "TriggerTemplateSpec defines the desired state of the TriggerTemplate.",
+      "type": "object",
+      "properties": {
+        "params": {
+          "description": "Params is the list of parameters this TriggerTemplate declares; a Trigger/EventListener's bound TriggerBindings must supply a value for every one with no default.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ParamSpec"
+          }
+        },
+        "resourcetemplates": {
+          "description": "ResourceTemplates is a list of resources to create (e.g. a PipelineRun), templated with $(tt.params.NAME). Each entry is an arbitrary Kubernetes resource manifest, not a fixed shape.",
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "ParamSpec": {
+      "description": "ParamSpec defines a parameter a TriggerBinding/TriggerTemplate declares, to be supplied via a Param.",
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Name declares the name by which a parameter is referenced."
+        },
+        "description": {
+          "type": "string",
+          "description": "Description is a user-facing description of the parameter that may be used to populate a UI."
+        },
+        "default": {
+          "type": "string",
+          "description": "Default is the value a parameter takes if no input value via a Param is supplied."
+        }
+      }
+    },
+    "TriggerInterceptor": {
+      "description": "TriggerInterceptor provides a hook to intercept and pre-process events.",
+      "type": "object",
+      "required": [
+        "ref"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Optional name to identify the current interceptor configuration."
+        },
+        "ref": {
+          "$ref": "#/definitions/InterceptorRef"
+        },
+        "params": {
+          "description": "Params are the params to send to the interceptor.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/InterceptorParams"
+          }
+        },
+        "webhook": {
+          "$ref": "#/definitions/WebhookInterceptor"
+        }
+      }
+    },
+    "InterceptorRef": {
+      "description": "InterceptorRef provides a reference to a ClusterInterceptor/NamespacedInterceptor.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Name of the referent; More info: http://kubernetes.io/docs/user-guide/identifiers#names"
+        },
+        "kind": {
+          "type": "string",
+          "description": "InterceptorKind indicates the kind of the Interceptor, namespaced or cluster scoped.",
+          "enum": [
+            "ClusterInterceptor",
+            "NamespacedInterceptor"
+          ],
+          "default": "ClusterInterceptor"
+        },
+        "apiVersion": {
+          "type": "string",
+          "description": "API version of the referent"
+        }
+      }
+    },
+    "InterceptorParams": {
+      "description": "InterceptorParams defines a key-value pair that can be passed on an interceptor.",
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "value": {
+          "description": "Value can be any JSON value (string, number, boolean, array, or object)."
+        }
+      }
+    },
+    "WebhookInterceptor": {
+      "description": "WebhookInterceptor refers to an old-style webhook interceptor service.",
+      "type": "object",
+      "properties": {
+        "objectRef": {
+          "description": "ObjectRef is a reference to an object that will resolve to a cluster DNS name to use as the EventInterceptor. Either objectRef or url can be specified.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string"
+            },
+            "namespace": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "apiVersion": {
+              "type": "string"
+            }
+          }
+        },
+        "url": {
+          "type": "string",
+          "description": "URL to use as the EventInterceptor, instead of objectRef."
+        },
+        "header": {
+          "description": "Header is a group of key-value pairs appended to the interceptor request headers, letting the interceptor make decisions specific to an EventListenerTrigger.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Param"
+          }
+        }
+      }
+    },
+    "Param": {
+      "description": "Param declares a value for a parameter a TriggerBinding declares.",
+      "type": "object",
+      "required": [
+        "name",
+        "value"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}
