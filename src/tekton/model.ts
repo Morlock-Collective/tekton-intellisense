@@ -1,4 +1,4 @@
-import { Document, LineCounter, parseAllDocuments, visit, YAMLMap, YAMLSeq, isMap, isSeq, isScalar } from "yaml";
+import { Document, LineCounter, parseAllDocuments, YAMLMap, YAMLSeq, isMap, isSeq, isScalar } from "yaml";
 import { maskHelmTemplates } from "./helmMask";
 
 export type TektonKind =
@@ -511,45 +511,6 @@ export function findResourceAt(docs: ParsedTektonDoc[], offset: number): ParsedT
   return best ?? docs[0];
 }
 
-/**
- * Finds the innermost YAMLMap node whose source range contains `offset`.
- * Used by editing commands to figure out "what am I inside of right now"
- * (e.g. a step container, a task entry) so inserts land in the right place.
- */
-export function findEnclosingMap(doc: Document.Parsed, offset: number): YAMLMap | undefined {
-  let result: YAMLMap | undefined;
-  visit(doc, {
-    Map(_key, node) {
-      const range = node.range;
-      if (range && offset >= range[0] && offset <= range[2]) {
-        result = node;
-      }
-    },
-  });
-  return result;
-}
-
-/** Finds the innermost YAMLSeq node whose source range contains `offset`. */
-export function findEnclosingSeq(doc: Document.Parsed, offset: number): YAMLSeq | undefined {
-  let result: YAMLSeq | undefined;
-  visit(doc, {
-    Seq(_key, node) {
-      const range = node.range;
-      if (range && offset >= range[0] && offset <= range[2]) {
-        result = node;
-      }
-    },
-  });
-  return result;
-}
-
-/** Locates the `spec.<key>` sequence node (e.g. spec.tasks, spec.params), if present. */
-export function findSpecSeq(doc: Document.Parsed, key: string): YAMLSeq | undefined {
-  const root = isMap(doc.contents) ? doc.contents : undefined;
-  const spec = root ? mapOf(root.get("spec", true)) : undefined;
-  return spec ? seqOf(spec.get(key, true)) : undefined;
-}
-
 /** Locates the `spec` map node itself. */
 export function findSpecMap(doc: Document.Parsed): YAMLMap | undefined {
   const root = isMap(doc.contents) ? doc.contents : undefined;
@@ -709,10 +670,10 @@ export function resolveTaskSpecOwner(parsed: ParsedTektonDoc): SpecListOwner | u
 /**
  * Every `spec.tasks[]`/`spec.finally[]` entry as its raw YAMLMap node
  * (Pipeline or PipelineRun-inline-pipelineSpec aware, via
- * {@link resolvePipelineSpecOwner}). Unlike {@link findEnclosingMap}, which
- * finds whatever map is innermost at an offset, this only ever returns
- * actual task-list entries — a params-list item (`- name: x`) inside a
- * task also has a `name` key and would otherwise be mistaken for one.
+ * {@link resolvePipelineSpecOwner}). Unlike a generic "innermost map at this
+ * offset" search, this only ever returns actual task-list entries — a
+ * params-list item (`- name: x`) inside a task also has a `name` key and
+ * would otherwise be mistaken for one.
  */
 export function pipelineTaskEntryMaps(parsed: ParsedTektonDoc): YAMLMap[] {
   const owner = resolvePipelineSpecOwner(parsed);

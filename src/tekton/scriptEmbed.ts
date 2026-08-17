@@ -205,10 +205,3 @@ export function findEmbeddedScriptBlocks(parsed: ParsedTektonDoc): EmbeddedScrip
   }
   return blocks;
 }
-
-/** The embedded script block whose content range contains `offset`, if any. */
-export function findEnclosingScriptBlock(parsed: ParsedTektonDoc, offset: number): EmbeddedScriptBlock | undefined {
-  return findEmbeddedScriptBlocks(parsed).find(
-    (b) => offset >= b.hostRange[0] && offset <= b.hostRange[1]
-  );
-}
