@@ -56,6 +56,11 @@ export class TektonRefCodeActionProvider implements vscode.CodeActionProvider {
   ): vscode.CodeAction[] {
     const actions: vscode.CodeAction[] = [];
     const taskParamGroups = new Map<string, TaskParamGroup>();
+    // Parsed once up front and threaded through every fix below, instead of each one re-parsing
+    // `document.getText()` from scratch -- a document with several fixable diagnostics in the
+    // requested range (e.g. three missing params, each offering its own "add X" and "add a
+    // default" fix, plus one "add all") would otherwise re-run the full parse once per fix.
+    const docs = parseTektonFile(document.getText());
 
     // First pass: dispatch every fix that's independent of the others, and group
     // "add-task-param:" diagnostics by task entry (see TaskParamGroup) without building their
@@ -70,7 +75,7 @@ export class TektonRefCodeActionProvider implements vscode.CodeActionProvider {
       if (code.startsWith("suggest:")) {
         actions.push(this.suggestFix(document, diagnostic, code.slice("suggest:".length)));
       } else if (code.startsWith("add-runafter:")) {
-        const action = this.addRunAfterFix(document, diagnostic, code.slice("add-runafter:".length));
+        const action = this.addRunAfterFix(document, docs, diagnostic, code.slice("add-runafter:".length));
         if (action) actions.push(action);
       } else if (code.startsWith("add-task-param:")) {
         const [taskRefName, paramName] = code.slice("add-task-param:".length).split(":");
@@ -95,13 +100,13 @@ export class TektonRefCodeActionProvider implements vscode.CodeActionProvider {
       // just one, this would be a redundant duplicate of the per-diagnostic "add X" fix below it.
       const offeringAddAll = group.paramNames.length >= 2;
       if (offeringAddAll) {
-        const action = this.addAllTaskParamsFix(document, group.diagnostics, group.paramNames);
+        const action = this.addAllTaskParamsFix(document, docs, group.diagnostics, group.paramNames);
         if (action) actions.push(action);
       }
       for (let i = 0; i < group.diagnostics.length; i++) {
         const diagnostic = group.diagnostics[i];
         const paramName = group.paramNames[i];
-        const bindingFix = this.addTaskParamBindingFix(document, diagnostic, paramName, !offeringAddAll);
+        const bindingFix = this.addTaskParamBindingFix(document, docs, diagnostic, paramName, !offeringAddAll);
         if (bindingFix) actions.push(bindingFix);
         const defaultFix = this.addTaskParamDefaultFix(diagnostic, group.taskRefName, paramName);
         if (defaultFix) actions.push(defaultFix);
@@ -120,9 +125,14 @@ export class TektonRefCodeActionProvider implements vscode.CodeActionProvider {
     return action;
   }
 
-  private addRunAfterFix(document: vscode.TextDocument, diagnostic: vscode.Diagnostic, taskName: string): vscode.CodeAction | undefined {
+  private addRunAfterFix(
+    document: vscode.TextDocument,
+    docs: ParsedTektonDoc[],
+    diagnostic: vscode.Diagnostic,
+    taskName: string
+  ): vscode.CodeAction | undefined {
     const offset = document.offsetAt(diagnostic.range.start);
-    const parsed = findResourceAt(parseTektonFile(document.getText()), offset);
+    const parsed = findResourceAt(docs, offset);
     if (!parsed) return undefined;
 
     const entryMap = findEnclosingTaskEntry(parsed, offset);
@@ -214,12 +224,13 @@ export class TektonRefCodeActionProvider implements vscode.CodeActionProvider {
    */
   private addTaskParamBindingFix(
     document: vscode.TextDocument,
+    docs: ParsedTektonDoc[],
     diagnostic: vscode.Diagnostic,
     paramName: string,
     isPreferred: boolean
   ): vscode.CodeAction | undefined {
     const offset = document.offsetAt(diagnostic.range.start);
-    const parsed = findResourceAt(parseTektonFile(document.getText()), offset);
+    const parsed = findResourceAt(docs, offset);
     if (!parsed) return undefined;
 
     const owner = this.paramBindingOwner(document, parsed, offset);
@@ -241,9 +252,14 @@ export class TektonRefCodeActionProvider implements vscode.CodeActionProvider {
    * doc comment for why this one (not it) gets `isPreferred` whenever both
    * are on offer.
    */
-  private addAllTaskParamsFix(document: vscode.TextDocument, diagnostics: vscode.Diagnostic[], paramNames: string[]): vscode.CodeAction | undefined {
+  private addAllTaskParamsFix(
+    document: vscode.TextDocument,
+    docs: ParsedTektonDoc[],
+    diagnostics: vscode.Diagnostic[],
+    paramNames: string[]
+  ): vscode.CodeAction | undefined {
     const offset = document.offsetAt(diagnostics[0].range.start);
-    const parsed = findResourceAt(parseTektonFile(document.getText()), offset);
+    const parsed = findResourceAt(docs, offset);
     if (!parsed) return undefined;
 
     const owner = this.paramBindingOwner(document, parsed, offset);
