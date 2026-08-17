@@ -14,6 +14,28 @@ function offsetToPosition(doc: vscode.TextDocument, offset: number): vscode.Posi
 }
 
 /**
+ * The "Unknown X. Did you mean Y? / Declared Xs: ..." message + Levenshtein
+ * suggestion shared by every "this name doesn't match any declared one"
+ * check below that draws its candidate list from the *current* document
+ * (as opposed to `checkTriggerRefs`'s cross-file version, whose "declared
+ * elsewhere" framing doesn't fit this same phrasing, or `checkTaskParamWiring`'s
+ * "for taskRef X" variant, which needs an extra clause mid-sentence).
+ * `label` is the singular noun used in "Unknown {label}"; `pluralLabel` the
+ * one used in "Declared {pluralLabel}:" -- almost always `label + "s"`, but
+ * kept as separate parameters since `$(tt.params.X)` says "Unknown param"
+ * (not "parameter") while still listing "Declared params".
+ */
+function unknownNameProblem(label: string, pluralLabel: string, name: string, names: string[]): { message: string; suggestion?: string } {
+  const suggestion = closestMatch(name, names);
+  return {
+    message: suggestion
+      ? `Unknown ${label} "${name}". Did you mean "${suggestion}"?`
+      : `Unknown ${label} "${name}". Declared ${pluralLabel}: ${names.join(", ") || "(none)"}.`,
+    suggestion,
+  };
+}
+
+/**
  * Flags repeated names within a single declaration list (spec.params,
  * spec.workspaces, spec.results, spec.tasks+finally). Tekton/Kubernetes
  * schema validation rejects these outright at apply time, so this is a real
@@ -63,18 +85,12 @@ function checkTaskWorkspaceBindings(document: vscode.TextDocument, symbols: Tekt
       if (!binding.workspaceName || !binding.workspaceNameRange) continue;
       if (names.includes(binding.workspaceName)) continue;
 
-      const suggestion = closestMatch(binding.workspaceName, names);
+      const { message, suggestion } = unknownNameProblem("workspace", "workspaces", binding.workspaceName, names);
       const range = new vscode.Range(
         offsetToPosition(document, binding.workspaceNameRange[0]),
         offsetToPosition(document, binding.workspaceNameRange[1])
       );
-      const diagnostic = new vscode.Diagnostic(
-        range,
-        suggestion
-          ? `Unknown workspace "${binding.workspaceName}". Did you mean "${suggestion}"?`
-          : `Unknown workspace "${binding.workspaceName}". Declared workspaces: ${names.join(", ") || "(none)"}.`,
-        vscode.DiagnosticSeverity.Warning
-      );
+      const diagnostic = new vscode.Diagnostic(range, message, vscode.DiagnosticSeverity.Warning);
       diagnostic.source = DIAGNOSTIC_SOURCE;
       if (suggestion) diagnostic.code = `suggest:${suggestion}`;
       diagnostics.push(diagnostic);
@@ -364,29 +380,11 @@ function checkRef(
   switch (ref.kind) {
     case "param": {
       const names = symbols.params.map((p) => p.name);
-      if (ref.name && !names.includes(ref.name)) {
-        const suggestion = closestMatch(ref.name, names);
-        return {
-          message: suggestion
-            ? `Unknown parameter "${ref.name}". Did you mean "${suggestion}"?`
-            : `Unknown parameter "${ref.name}". Declared params: ${names.join(", ") || "(none)"}.`,
-          suggestion,
-        };
-      }
-      return undefined;
+      return ref.name && !names.includes(ref.name) ? unknownNameProblem("parameter", "params", ref.name, names) : undefined;
     }
     case "workspace": {
       const names = symbols.workspaces.map((w) => w.name);
-      if (ref.name && !names.includes(ref.name)) {
-        const suggestion = closestMatch(ref.name, names);
-        return {
-          message: suggestion
-            ? `Unknown workspace "${ref.name}". Did you mean "${suggestion}"?`
-            : `Unknown workspace "${ref.name}". Declared workspaces: ${names.join(", ") || "(none)"}.`,
-          suggestion,
-        };
-      }
-      return undefined;
+      return ref.name && !names.includes(ref.name) ? unknownNameProblem("workspace", "workspaces", ref.name, names) : undefined;
     }
     case "result": {
       // Only meaningful within Task-like docs that declare their own results.
@@ -394,31 +392,13 @@ function checkRef(
         return undefined;
       }
       const names = symbols.results.map((r) => r.name);
-      if (ref.name && !names.includes(ref.name)) {
-        const suggestion = closestMatch(ref.name, names);
-        return {
-          message: suggestion
-            ? `Unknown result "${ref.name}". Did you mean "${suggestion}"?`
-            : `Unknown result "${ref.name}". Declared results: ${names.join(", ") || "(none)"}.`,
-          suggestion,
-        };
-      }
-      return undefined;
+      return ref.name && !names.includes(ref.name) ? unknownNameProblem("result", "results", ref.name, names) : undefined;
     }
     case "tt-param": {
       // Only meaningful within a TriggerTemplate, validating $(tt.params.NAME) against its own spec.params.
       if (symbols.kind !== "TriggerTemplate") return undefined;
       const names = symbols.params.map((p) => p.name);
-      if (ref.name && !names.includes(ref.name)) {
-        const suggestion = closestMatch(ref.name, names);
-        return {
-          message: suggestion
-            ? `Unknown param "${ref.name}". Did you mean "${suggestion}"?`
-            : `Unknown param "${ref.name}". Declared params: ${names.join(", ") || "(none)"}.`,
-          suggestion,
-        };
-      }
-      return undefined;
+      return ref.name && !names.includes(ref.name) ? unknownNameProblem("param", "params", ref.name, names) : undefined;
     }
     case "task-result": {
       if (symbols.kind !== "Pipeline") return undefined;
