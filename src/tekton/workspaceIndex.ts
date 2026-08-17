@@ -1,8 +1,6 @@
 import * as vscode from "vscode";
 import { parseTektonFile, ParsedTektonDoc, TASK_LIKE_KINDS, TRIGGER_BINDING_LIKE_KINDS, TektonKind, TektonSymbols } from "./model";
-
-const YAML_GLOB = "**/*.{yaml,yml}";
-const EXCLUDE_GLOB = "**/{node_modules,.git}/**";
+import { YAML_GLOB, EXCLUDE_GLOB, readWorkspaceFileText } from "./workspaceScan";
 
 export interface IndexedResource {
   uri: vscode.Uri;
@@ -138,18 +136,12 @@ export class TektonWorkspaceIndex implements vscode.Disposable {
   }
 
   private async indexFileFromDisk(uri: vscode.Uri): Promise<void> {
-    // Prefer the live (possibly unsaved) buffer if the file is open.
-    const open = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri.toString());
-    if (open) {
-      this.indexDocument(open);
-      return;
-    }
-    try {
-      const bytes = await vscode.workspace.fs.readFile(uri);
-      this.index(uri, Buffer.from(bytes).toString("utf8"));
-    } catch {
-      // File may have been deleted between the watcher event and the read; ignore.
-    }
+    // Only ever called with a uri that already matched YAML_GLOB (the watcher, or initialScan),
+    // so unlike indexDocument's callers (onDidOpenTextDocument fires for any file), there's no
+    // need to re-check the filename here -- readWorkspaceFileText undefined just means the file
+    // was deleted between the watcher event and this read, not worth surfacing as an error.
+    const text = await readWorkspaceFileText(uri);
+    if (text !== undefined) this.index(uri, text);
   }
 
   private indexDocument(document: vscode.TextDocument): void {

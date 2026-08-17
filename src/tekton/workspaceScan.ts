@@ -1,10 +1,20 @@
 import * as vscode from "vscode";
 import { parseTektonFile, ParsedTektonDoc, TektonKind } from "./model";
 
-const YAML_GLOB = "**/*.{yaml,yml}";
-const EXCLUDE_GLOB = "**/{node_modules,.git}/**";
+/** Glob patterns shared by every workspace-wide YAML scan -- this on-demand one and `workspaceIndex.ts`'s persistent one. */
+export const YAML_GLOB = "**/*.{yaml,yml}";
+export const EXCLUDE_GLOB = "**/{node_modules,.git}/**";
 
-async function readFileText(uri: vscode.Uri): Promise<string | undefined> {
+/**
+ * A file's current text, preferring the live (possibly unsaved) buffer if
+ * it's open over whatever's on disk -- shared by this module's on-demand
+ * scan and `workspaceIndex.ts`'s persistent one, both of which need "what
+ * the user is actually looking at" rather than the last-saved content.
+ * Undefined if the file can't be read (e.g. deleted between a caller
+ * listing it and reading it) -- expected to happen occasionally, not an
+ * error worth surfacing.
+ */
+export async function readWorkspaceFileText(uri: vscode.Uri): Promise<string | undefined> {
   const open = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri.toString());
   if (open) return open.getText();
   try {
@@ -29,7 +39,7 @@ export async function findWorkspaceDocs(kinds: readonly TektonKind[]): Promise<{
   const uris = await vscode.workspace.findFiles(YAML_GLOB, EXCLUDE_GLOB, 5000);
   const found = await Promise.all(
     uris.map(async (uri) => {
-      const text = await readFileText(uri);
+      const text = await readWorkspaceFileText(uri);
       if (text === undefined) return [];
       return parseTektonFile(text)
         .filter((parsed) => kinds.includes(parsed.symbols.kind))
