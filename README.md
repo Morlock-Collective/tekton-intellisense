@@ -23,6 +23,11 @@ of future improvement.
   distance) and a quick fix to apply it.
 - **Duplicate-name validation** — duplicated `name` fields in `params`, `workspaces` or `results`, as well as `tasks` and `finally` lists, are checked against.
 - **Task-level workspace binding validation** — Works the same way as parameter validation.
+- **Schema validation** — unknown/missing keys and wrong types or enum values are checked against
+  Tekton's own schemas (`schemas/`), on top of the reference checks above. Works on Helm-templated
+  files too, without flagging a masked `{{ ... }}` value as the wrong type.
+- **Schema-aware completion** — suggests valid keys wherever the cursor is (e.g. `script`/`image`
+  inside a step), not just inside `$(...)`.
 - **Missing-`runAfter` hint** — an informative hint if omitting runAfter when 
   referencing the result from an earlier task (if the user wants to make the order explicit).
 - **Tekton Triggers support** — `EventListener`/`Trigger`/`TriggerTemplate`/
