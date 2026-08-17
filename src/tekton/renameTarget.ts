@@ -1,5 +1,9 @@
 import { ParsedTektonDoc, stepActionRefs, TaskSymbol, TASK_LIKE_KINDS, TRIGGER_BINDING_LIKE_KINDS } from "./model";
 import { paramRefsIn } from "./paramRefs";
+// Type-only: erased at compile time, so this file (tested directly against plain Node, no vscode
+// shim needed -- see test-fixtures/check.js) never actually depends on the "vscode" module that
+// workspaceIndex.ts itself requires.
+import type { TektonWorkspaceIndex, IndexedResource } from "./workspaceIndex";
 
 /**
  * What's being renamed, and the range of the specific token under the
@@ -350,4 +354,39 @@ export function triggerRefIdentityEdits(parsed: ParsedTektonDoc, name: string, n
     }
   }
   return edits;
+}
+
+/**
+ * Resolves one of the five `*-identity` `RenameTarget` kinds to its
+ * declaring record and a human-readable kind label, via whichever
+ * `TektonWorkspaceIndex` lookup matches -- the same 5-way switch
+ * `hover.ts`'s identity card and `definitions.ts`'s "go to definition"
+ * both need, kept in one place so a 6th identity kind (if Tekton ever
+ * grows one) only needs updating here. Undefined for a non-identity
+ * target kind (e.g. `"param"`, `"task-param"`), which callers should
+ * handle themselves first -- `task-param` in particular resolves to a
+ * *param* on a Task record, not the Task's own identity, a different
+ * shape from this function's result.
+ */
+export function resolveIdentityRecord(
+  workspaceIndex: TektonWorkspaceIndex,
+  target: RenameTarget
+): { record: IndexedResource; kindLabel: string } | undefined {
+  const lookup = ((): { record: IndexedResource | undefined; kindLabel: string } | undefined => {
+    switch (target.kind) {
+      case "task-identity":
+        return { record: workspaceIndex.lookupTaskRecord(target.name), kindLabel: "Task" };
+      case "pipeline-identity":
+        return { record: workspaceIndex.lookupPipelineRecord(target.name), kindLabel: "Pipeline" };
+      case "template-identity":
+        return { record: workspaceIndex.lookupTriggerTemplateRecord(target.name), kindLabel: "TriggerTemplate" };
+      case "binding-identity":
+        return { record: workspaceIndex.lookupTriggerBindingRecord(target.name), kindLabel: "TriggerBinding" };
+      case "trigger-identity":
+        return { record: workspaceIndex.lookupTriggerRecord(target.name), kindLabel: "Trigger" };
+      default:
+        return undefined;
+    }
+  })();
+  return lookup?.record ? { record: lookup.record, kindLabel: lookup.kindLabel } : undefined;
 }

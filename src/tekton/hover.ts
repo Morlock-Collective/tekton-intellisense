@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import { ParamSymbol, WorkspaceSymbol, ResultSymbol, TaskSymbol, ParsedTektonDoc, parseTektonFile, findResourceAt } from "./model";
 import { paramRefsIn } from "./paramRefs";
-import { resolveRenameTarget } from "./renameTarget";
+import { resolveRenameTarget, resolveIdentityRecord } from "./renameTarget";
 import { CONTEXT_TREE, CONTEXT_GROUP_DESCRIPTIONS } from "./contextVariables";
 import { TektonWorkspaceIndex, IndexedResource } from "./workspaceIndex";
 
@@ -186,33 +186,8 @@ export class TektonHoverProvider implements vscode.HoverProvider {
       return new vscode.Hover(taskParamHover(target.paramName, target.taskRefName, this.workspaceIndex), rangeOf(document, target.range));
     }
 
-    let record: IndexedResource | undefined;
-    let kindLabel: string;
-    switch (target.kind) {
-      case "task-identity":
-        record = this.workspaceIndex.lookupTaskRecord(target.name);
-        kindLabel = "Task";
-        break;
-      case "pipeline-identity":
-        record = this.workspaceIndex.lookupPipelineRecord(target.name);
-        kindLabel = "Pipeline";
-        break;
-      case "template-identity":
-        record = this.workspaceIndex.lookupTriggerTemplateRecord(target.name);
-        kindLabel = "TriggerTemplate";
-        break;
-      case "binding-identity":
-        record = this.workspaceIndex.lookupTriggerBindingRecord(target.name);
-        kindLabel = "TriggerBinding";
-        break;
-      case "trigger-identity":
-        record = this.workspaceIndex.lookupTriggerRecord(target.name);
-        kindLabel = "Trigger";
-        break;
-      default:
-        return undefined;
-    }
-    if (!record) return undefined;
-    return new vscode.Hover(identityHover(kindLabel, record), rangeOf(document, target.range));
+    const resolved = resolveIdentityRecord(this.workspaceIndex, target);
+    if (!resolved) return undefined;
+    return new vscode.Hover(identityHover(resolved.kindLabel, resolved.record), rangeOf(document, target.range));
   }
 }

@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import { ParsedTektonDoc, parseTektonFile, findResourceAt } from "./model";
 import { paramRefsIn } from "./paramRefs";
-import { resolveRenameTarget } from "./renameTarget";
+import { resolveRenameTarget, resolveIdentityRecord } from "./renameTarget";
 import { TektonWorkspaceIndex } from "./workspaceIndex";
 import { toVscodeRange } from "./rangeUtils";
 
@@ -93,23 +93,9 @@ export class TektonDefinitionProvider implements vscode.DefinitionProvider {
       return new vscode.Location(taskRecord.uri, toVscodeRange(taskRecord.parsed, param.range));
     }
 
-    const record = (() => {
-      switch (target.kind) {
-        case "task-identity":
-          return this.workspaceIndex.lookupTaskRecord(target.name);
-        case "pipeline-identity":
-          return this.workspaceIndex.lookupPipelineRecord(target.name);
-        case "template-identity":
-          return this.workspaceIndex.lookupTriggerTemplateRecord(target.name);
-        case "binding-identity":
-          return this.workspaceIndex.lookupTriggerBindingRecord(target.name);
-        case "trigger-identity":
-          return this.workspaceIndex.lookupTriggerRecord(target.name);
-        default:
-          return undefined;
-      }
-    })();
-    if (!record?.parsed.symbols.metadataNameRange) return undefined;
-    return new vscode.Location(record.uri, toVscodeRange(record.parsed, record.parsed.symbols.metadataNameRange));
+    const resolved = resolveIdentityRecord(this.workspaceIndex, target);
+    const nameRange = resolved?.record.parsed.symbols.metadataNameRange;
+    if (!resolved || !nameRange) return undefined;
+    return new vscode.Location(resolved.record.uri, toVscodeRange(resolved.record.parsed, nameRange));
   }
 }
