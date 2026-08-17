@@ -18,7 +18,7 @@ function offsetToPosition(doc: vscode.TextDocument, offset: number): vscode.Posi
  * suggestion shared by every "this name doesn't match any declared one"
  * check below that draws its candidate list from the *current* document
  * (as opposed to `checkTriggerRefs`'s cross-file version, whose "declared
- * elsewhere" framing doesn't fit this same phrasing, or `checkTaskParamWiring`'s
+ * elsewhere" framing doesn't fit this same phrasing, or `checkTaskParamBindings`'s
  * "for taskRef X" variant, which needs an extra clause mid-sentence).
  * `label` is the singular noun used in "Unknown {label}"; `pluralLabel` the
  * one used in "Declared {pluralLabel}:" -- almost always `label + "s"`, but
