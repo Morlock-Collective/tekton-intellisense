@@ -2274,6 +2274,60 @@ console.log("\nCompletion provider: $(...) trigger refs and identity ref-name fi
   const okObjectSnippet = computeResourcesItem?.insertText?.value === "computeResources: \n  ${0}";
   console.log(`  [${okObjectSnippet ? "PASS" : "FAIL"}] "computeResources" (an object field) inserts a fresh indented line (${JSON.stringify(computeResourcesItem?.insertText?.value)})`);
   if (!okObjectSnippet) failures++;
+
+  // A blank line right after a *parent* key ("spec:"), not just a trailing one at the end of a
+  // block -- findEnclosingMap alone resolves this to the wrong (grandparent) map, since a blank
+  // line has no committed structure of its own yet for the AST to place correctly.
+  const specCompletionSnippet = [
+    "apiVersion: tekton.dev/v1",
+    "kind: Pipeline",
+    "metadata:",
+    "  name: p",
+    "spec:",
+    "  ",
+    "  workspaces:",
+    "    - name: mdk-workspace",
+    "  tasks:",
+    "    - name: build",
+  ].join("\n");
+  const specBlankLine = specCompletionSnippet.split("\n").findIndex((l) => l === "  ");
+  const specBlankDoc = makeDocument(specCompletionSnippet);
+  const specBlankProvider = new TektonRefCompletionProvider(noopIndex, SCHEMAS_DIR);
+  const specBlankLabels = (
+    specBlankProvider.provideCompletionItems(specBlankDoc, new Position(specBlankLine, 2)) ?? []
+  ).map((i) => i.label);
+  const okSpecBlank =
+    specBlankLabels.includes("params") && specBlankLabels.includes("results") && !specBlankLabels.includes("status");
+  console.log(`  [${okSpecBlank ? "PASS" : "FAIL"}] Pipeline: blank line right after "spec:" completes at spec level, not root (${JSON.stringify(specBlankLabels)})`);
+  if (!okSpecBlank) failures++;
+
+  // Same spot, but with "p" already typed: existing sibling keys ("workspaces") must still be
+  // excluded (typing corrupts the AST here -- "p" with no colon, immediately above "workspaces:",
+  // is valid YAML plain-scalar line-folding into one "p workspaces" key -- this has to work from
+  // indentation, not the parsed structure), and the completion must replace "p", not insert
+  // alongside it.
+  const specCompletionWithP = specCompletionSnippet.replace("\n  \n  workspaces:", "\n  p\n  workspaces:");
+  const pItems = completeItemsAt(specCompletionWithP, "  p", noopIndex);
+  const pLabels = pItems.map((i) => i.label);
+  const okPExcludesExisting = pLabels.includes("params") && !pLabels.includes("workspaces") && !pLabels.includes("tasks");
+  console.log(`  [${okPExcludesExisting ? "PASS" : "FAIL"}] typed "p": already-present "workspaces"/"tasks" excluded despite the AST-corrupting fold (${JSON.stringify(pLabels)})`);
+  if (!okPExcludesExisting) failures++;
+
+  const paramsItem = pItems.find((i) => i.label === "params");
+  const withPDoc = makeDocument(specCompletionWithP);
+  const pLineStart = specCompletionWithP.indexOf("  p\n");
+  const expectedRange = new Range(withPDoc.positionAt(pLineStart + 2), withPDoc.positionAt(pLineStart + 3)); // just the "p"
+  const okReplaceRange =
+    paramsItem?.range &&
+    paramsItem.range.start.line === expectedRange.start.line &&
+    paramsItem.range.start.character === expectedRange.start.character &&
+    paramsItem.range.end.line === expectedRange.end.line &&
+    paramsItem.range.end.character === expectedRange.end.character;
+  console.log(`  [${okReplaceRange ? "PASS" : "FAIL"}] typed "p": completion replaces just the typed prefix, not inserted alongside it`);
+  if (!okReplaceRange) {
+    console.log({ actual: paramsItem?.range, expected: expectedRange });
+    failures++;
+  }
 }
 
 console.log("\nEmbedded script block detection (scriptEmbed.ts):");

@@ -9,6 +9,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Contextual key completion from the same schemas (e.g. suggesting `script`/`image` inside a step)
 - `tektonIntellisense.enableSchemaValidation` setting (default on)
 
+### Fixed
+- Schema-key completion resolved the wrong (grandparent) map for a blank line right after a parent key, and for a partially-typed key on its own line -- both now work from indentation instead of the (in-progress-edit-corrupted) parsed structure
+- Schema-key completion didn't exclude already-present keys in either of those cases, and didn't replace an already-typed prefix, leaving it stuck in front of the inserted key
+
 ## [0.5.0] - 2026-08-17
 
 ### Added

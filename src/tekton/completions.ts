@@ -294,13 +294,18 @@ export class TektonRefCompletionProvider implements vscode.CompletionItemProvide
     const schema = loadSchema(this.schemasDir, parsed.symbols.apiVersion, parsed.symbols.kind);
     if (!schema) return undefined;
 
-    const completions = schemaPropertyCompletions(parsed.doc, parsed.text, schema, document.offsetAt(position));
-    if (completions.length === 0) return undefined;
-    return completions.map((c) => this.toSchemaCompletionItem(c));
+    const result = schemaPropertyCompletions(parsed.text, schema, document.offsetAt(position));
+    if (!result || result.completions.length === 0) return undefined;
+
+    const replaceRange = new vscode.Range(document.positionAt(result.replaceRange[0]), document.positionAt(result.replaceRange[1]));
+    return result.completions.map((c) => this.toSchemaCompletionItem(c, replaceRange));
   }
 
-  private toSchemaCompletionItem(c: SchemaPropertyCompletion): vscode.CompletionItem {
+  private toSchemaCompletionItem(c: SchemaPropertyCompletion, replaceRange: vscode.Range): vscode.CompletionItem {
     const ci = new vscode.CompletionItem(c.name, vscode.CompletionItemKind.Property);
+    // Replaces whatever's already typed on this line (e.g. "p") rather than inserting alongside
+    // it -- without this, accepting "params" over a typed "p" would leave "pparams: " behind.
+    ci.range = replaceRange;
     if (c.description) ci.documentation = new vscode.MarkdownString(c.description);
 
     // A snippet, not plain text, in every case -- even the plain scalar one -- so acceptance

@@ -55,9 +55,6 @@ kind: Pipeline
 metadata:
   name: mdk-pipeline
 spec:
-  params:
-    - name: greeting
-      type: string
   workspaces:
     - name: mdk-workspace
   tasks:
