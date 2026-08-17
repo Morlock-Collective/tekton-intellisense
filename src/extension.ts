@@ -151,7 +151,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.languages.registerCompletionItemProvider(
       { pattern: "**/*.{yaml,yml}" },
-      new TektonRefCompletionProvider(workspaceIndex),
+      new TektonRefCompletionProvider(workspaceIndex, schemasDir),
       ...TektonRefCompletionProvider.triggerCharacters
     )
   );

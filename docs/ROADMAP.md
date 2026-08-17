@@ -244,6 +244,44 @@ add all of them in a single edit instead of one quick fix apiece
 just sharing a `taskRefName`, since two different entries in one document
 could reference the same Task).
 
+**Schema-driven structural diagnostics and key completion**
+(`jsonSchemas.ts`, `schemaValidation.ts`, `schemaCompletions.ts`) — the
+first two-thirds of the JSON Schema investigation from earlier (see
+`schemas/README.md`): validates each resource against its matching
+schema via `ajv`, and offers "what key goes here" completion by walking
+the AST and the schema in parallel. Complementary to the hand-rolled
+domain model, not a replacement — schema validation catches wrong shape
+(`scirpt:`, a required key missing, an enum typo) that no amount of
+cross-reference checking would; the existing checks catch dangling
+references (an unknown param/workspace/taskRef) that a static schema
+can't express at all.
+
+Two things needed fixing before either was usable: the
+Kubernetes-generated schemas never set `additionalProperties: false`
+themselves (CRDs traditionally prune or preserve unknown fields rather
+than rejecting them), so `jsonSchemas.ts` tightens every object schema
+that doesn't already say otherwise before compiling it — otherwise a
+typo'd key would just silently pass. And Helm-masked values (`{{ ... }}`
+collapses to `null` when a directive stands alone on its own line, or to
+a same-length run of `x`s inline) produced real false positives (a
+`labels: {{ include ... }}` map masking to a bare scalar, tripping a
+"must be object" error) until `schemaValidation.ts` learned to recognize
+and suppress exactly that shape, on a Helm-templated document only.
+
+Key completion piggybacks on the exact same path/schema-walking logic:
+`findEnclosingMap` finds the map the cursor is in, `pathTo` records how
+it got there from the document root, `schemaAt` walks the schema through
+that same path. The one asymmetry worth noting: a *blank* line (the
+common "cursor here, about to type a new key" trigger) has no committed
+structure for YAML to have parsed at all until either more content
+commits it or the enclosing block closes, so `findEnclosingMap` finds
+nothing right at such an offset even when a human reading the file would
+have no doubt which map it belongs to — worked around by backscanning to
+the nearest real content's own position and asking there instead, which
+recovers the single most common case (typing at the end of an existing
+block) at the cost of not being able to tell "still this block" from
+"starting a new, more deeply nested one" from a blank line alone.
+
 ## Notable bugs found and fixed along the way
 
 - Multi-line inserts only indented their first line correctly; the trailing
@@ -316,14 +354,9 @@ could reference the same Task).
       binding (when using `pipelineRef`) should cross-file-rename against
       its Pipeline's declared param, same shape as the Task-param rename
       just added one level down.
-- [ ] JSON Schema-driven validation/completion/hover: `schemas/` now has a
-      curated, verified set of draft-07 schemas for every kind this
-      extension recognizes (see `schemas/README.md` for scope/provenance),
-      but nothing in `src/` consumes them yet. Figuring out how they'd
-      layer against the existing hand-rolled domain model (redundant with
-      it in places — structural typo-catching — complementary in others —
-      full field enumeration this extension doesn't attempt today) is the
-      open design question, not just the wiring.
+- [ ] Schema-driven hover: structural diagnostics and key completion (see
+      "Done" below) are wired up; hover on a key showing its schema
+      description is the remaining piece of the original three-part ask.
 
 Publishing to the VS Code Marketplace / Open VSX is being done manually by
 the maintainer once a release is judged stable — not tracked here.

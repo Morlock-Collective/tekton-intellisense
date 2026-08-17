@@ -4,6 +4,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- Schema-driven structural diagnostics: unknown/missing keys and wrong types/enums, validated against Tekton's own schemas
+- Contextual key completion from the same schemas (e.g. suggesting `script`/`image` inside a step)
+- `tektonIntellisense.enableSchemaValidation` setting (default on)
+
 ## [0.5.0] - 2026-08-17
 
 ### Added

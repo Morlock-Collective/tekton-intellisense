@@ -2079,7 +2079,36 @@ console.log("\nCompletion provider: $(...) trigger refs and identity ref-name fi
       this.kind = kind;
     }
   }
-  const vscodeShim = { Position, Range, CompletionItem, CompletionItemKind: new Proxy({}, { get: () => 0 }) };
+  class MarkdownString {
+    constructor(value) {
+      this.value = value;
+    }
+  }
+  class SnippetString {
+    constructor() {
+      this.value = "";
+    }
+    appendText(text) {
+      this.value += text;
+      return this;
+    }
+    appendTabstop(n) {
+      this.value += `\${${n}}`;
+      return this;
+    }
+    appendChoice(choices) {
+      this.value += `\${1|${choices.join(",")}|}`;
+      return this;
+    }
+  }
+  const vscodeShim = {
+    Position,
+    Range,
+    CompletionItem,
+    MarkdownString,
+    SnippetString,
+    CompletionItemKind: new Proxy({}, { get: () => 0 }),
+  };
 
   const Module = require("module");
   const originalLoad = Module._load;
@@ -2113,8 +2142,19 @@ console.log("\nCompletion provider: $(...) trigger refs and identity ref-name fi
     if (lineIdx === -1) throw new Error(`fixture line containing ${JSON.stringify(needle)} not found`);
     const line = text.split("\n")[lineIdx];
     const position = new Position(lineIdx, line.length);
-    const provider = new TektonRefCompletionProvider(workspaceIndex ?? {});
+    const provider = new TektonRefCompletionProvider(workspaceIndex ?? {}, SCHEMAS_DIR);
     return (provider.provideCompletionItems(doc, position) ?? []).map((i) => i.label);
+  }
+
+  /** Same as completeAt, but returns the full CompletionItem objects (label + insertText/documentation), for schema-key completion assertions that need more than just the label. */
+  function completeItemsAt(text, needle, workspaceIndex) {
+    const doc = makeDocument(text);
+    const lineIdx = text.split("\n").findIndex((l) => l.includes(needle));
+    if (lineIdx === -1) throw new Error(`fixture line containing ${JSON.stringify(needle)} not found`);
+    const line = text.split("\n")[lineIdx];
+    const position = new Position(lineIdx, line.length);
+    const provider = new TektonRefCompletionProvider(workspaceIndex ?? {}, SCHEMAS_DIR);
+    return provider.provideCompletionItems(doc, position) ?? [];
   }
 
   const noopIndex = {
@@ -2199,6 +2239,41 @@ console.log("\nCompletion provider: $(...) trigger refs and identity ref-name fi
     `  [${okIdentityTask ? "PASS" : "FAIL"}] Pipeline: taskRef.name completion (${JSON.stringify(taskRefCompletions)}), PipelineRun: pipelineRef.name completion (${JSON.stringify(pipelineRefCompletions)})`
   );
   if (!okIdentityTask) failures++;
+
+  // Schema-key completion: falls through here whenever the cursor is inside neither a $(...) ref
+  // nor an identity ref-name field -- e.g. a fresh line within a step's own map.
+  const stepSnippet = [
+    "apiVersion: tekton.dev/v1",
+    "kind: Task",
+    "metadata:",
+    "  name: t",
+    "spec:",
+    "  steps:",
+    "    - name: build",
+    "      ",
+  ].join("\n");
+  const stepKeyLabels = completeAt(stepSnippet, "      ", noopIndex);
+  const okStepKey = stepKeyLabels.includes("script") && stepKeyLabels.includes("image") && !stepKeyLabels.includes("name");
+  console.log(`  [${okStepKey ? "PASS" : "FAIL"}] Task: step-level key completion offers "script"/"image", already-present "name" excluded (${stepKeyLabels.length} total)`);
+  if (!okStepKey) {
+    console.log(stepKeyLabels);
+    failures++;
+  }
+
+  const scriptItem = completeItemsAt(stepSnippet, "      ", noopIndex).find((i) => i.label === "script");
+  const okScriptSnippet = scriptItem?.insertText?.value === "script: ${0}";
+  console.log(`  [${okScriptSnippet ? "PASS" : "FAIL"}] "script" (a plain string field) inserts as "script: " with a trailing tabstop (${JSON.stringify(scriptItem?.insertText?.value)})`);
+  if (!okScriptSnippet) failures++;
+
+  const envItem = completeItemsAt(stepSnippet, "      ", noopIndex).find((i) => i.label === "env");
+  const okEnvSnippet = envItem?.insertText?.value === "env: \n  - ${0}";
+  console.log(`  [${okEnvSnippet ? "PASS" : "FAIL"}] "env" (an array field) inserts a fresh list item line (${JSON.stringify(envItem?.insertText?.value)})`);
+  if (!okEnvSnippet) failures++;
+
+  const computeResourcesItem = completeItemsAt(stepSnippet, "      ", noopIndex).find((i) => i.label === "computeResources");
+  const okObjectSnippet = computeResourcesItem?.insertText?.value === "computeResources: \n  ${0}";
+  console.log(`  [${okObjectSnippet ? "PASS" : "FAIL"}] "computeResources" (an object field) inserts a fresh indented line (${JSON.stringify(computeResourcesItem?.insertText?.value)})`);
+  if (!okObjectSnippet) failures++;
 }
 
 console.log("\nEmbedded script block detection (scriptEmbed.ts):");

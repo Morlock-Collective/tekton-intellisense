@@ -2,6 +2,8 @@ import * as vscode from "vscode";
 import { parseTektonFile, findResourceAt, ParsedTektonDoc, TASK_LIKE_KINDS, TektonSymbols, TRIGGER_BINDING_LIKE_KINDS } from "./model";
 import { TektonWorkspaceIndex } from "./workspaceIndex";
 import { CONTEXT_TREE } from "./contextVariables";
+import { loadSchema } from "./jsonSchemas";
+import { schemaPropertyCompletions, SchemaPropertyCompletion } from "./schemaCompletions";
 
 const WORKSPACE_FIELDS = ["path", "claim", "volume", "bound"];
 const RESULT_FIELDS = ["path"];
@@ -161,7 +163,10 @@ function triggerBindingCompletions(segments: string[], replaceRange: vscode.Rang
 export class TektonRefCompletionProvider implements vscode.CompletionItemProvider {
   static readonly triggerCharacters = ["(", "."];
 
-  constructor(private readonly workspaceIndex: TektonWorkspaceIndex) {}
+  constructor(
+    private readonly workspaceIndex: TektonWorkspaceIndex,
+    private readonly schemasDir: string
+  ) {}
 
   provideCompletionItems(
     document: vscode.TextDocument,
@@ -173,7 +178,13 @@ export class TektonRefCompletionProvider implements vscode.CompletionItemProvide
     const ctx = getRefContext(document, position);
     if (ctx) return this.completionsFor(ctx, parsed);
 
-    return this.identityCompletionsFor(document, position, parsed.symbols);
+    const identity = this.identityCompletionsFor(document, position, parsed.symbols);
+    if (identity) return identity;
+
+    // Falls through here for "what key goes here" completion (e.g. suggesting `script` inside a
+    // step's own map) whenever the cursor isn't inside a $(...) reference or an identity ref-name
+    // field -- the common case, since most of a document's content is neither of those.
+    return this.schemaCompletionsFor(document, position, parsed);
   }
 
   private identityCompletionsFor(
@@ -272,5 +283,40 @@ export class TektonRefCompletionProvider implements vscode.CompletionItemProvide
     }
 
     return [];
+  }
+
+  /** "What key goes here" completion, from the matching schema in `schemas/` -- see `schemaCompletions.ts`. */
+  private schemaCompletionsFor(
+    document: vscode.TextDocument,
+    position: vscode.Position,
+    parsed: ParsedTektonDoc
+  ): vscode.CompletionItem[] | undefined {
+    const schema = loadSchema(this.schemasDir, parsed.symbols.apiVersion, parsed.symbols.kind);
+    if (!schema) return undefined;
+
+    const completions = schemaPropertyCompletions(parsed.doc, parsed.text, schema, document.offsetAt(position));
+    if (completions.length === 0) return undefined;
+    return completions.map((c) => this.toSchemaCompletionItem(c));
+  }
+
+  private toSchemaCompletionItem(c: SchemaPropertyCompletion): vscode.CompletionItem {
+    const ci = new vscode.CompletionItem(c.name, vscode.CompletionItemKind.Property);
+    if (c.description) ci.documentation = new vscode.MarkdownString(c.description);
+
+    // A snippet, not plain text, in every case -- even the plain scalar one -- so acceptance
+    // always leaves the cursor at $0, ready to type the value, rather than after a bare "key: "
+    // with nothing selected.
+    const snippet = new vscode.SnippetString().appendText(`${c.name}: `);
+    if (c.enumValues && c.enumValues.length > 1) {
+      snippet.appendChoice(c.enumValues);
+    } else if (c.valueShape === "array") {
+      snippet.appendText("\n  - ").appendTabstop(0);
+    } else if (c.valueShape === "object") {
+      snippet.appendText("\n  ").appendTabstop(0);
+    } else {
+      snippet.appendTabstop(0);
+    }
+    ci.insertText = snippet;
+    return ci;
   }
 }
