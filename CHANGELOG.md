@@ -4,16 +4,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-17
+
 ### Added
 - Schema-driven structural diagnostics: unknown/missing keys and wrong types/enums, validated against Tekton's own schemas
 - Contextual key completion from the same schemas (e.g. suggesting `script`/`image` inside a step)
 - `tektonIntellisense.enableSchemaValidation` setting (default on)
 - Auto-indent after a line ending in `:` or a bare `-`, for `yaml`-language files that don't already get this from another extension (own Enter-key command, not `setLanguageConfiguration` -- see Fixed)
-
-### Fixed
-- Schema-key completion resolved the wrong (grandparent) map for a blank line right after a parent key, and for a partially-typed key on its own line -- both now work from indentation instead of the (in-progress-edit-corrupted) parsed structure
-- Schema-key completion didn't exclude already-present keys in either of those cases, and didn't replace an already-typed prefix, leaving it stuck in front of the inserted key
-- Auto-indent didn't actually take effect for plain `yaml` files -- `setLanguageConfiguration` calls from different extensions for the same language turned out not to be additive in practice, confirmed live; replaced with a dedicated Enter-key command instead
 
 ## [0.5.0] - 2026-08-17
 
