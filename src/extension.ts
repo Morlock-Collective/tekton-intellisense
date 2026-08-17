@@ -20,6 +20,38 @@ import { disposeEditTaskScript, editTaskScriptCommand, registerScriptWriteback }
 
 const YAML_LIKE = /\.(ya?ml)$/i;
 
+/**
+ * This extension owns no language of its own -- it only injects a grammar
+ * into "source.yaml"/"text.html.markdown" for `$(...)` highlighting (see
+ * `package.json`'s `contributes.grammars`) -- so auto-indent-on-Enter
+ * behavior normally comes entirely from whichever extension registered
+ * the "yaml"/"helm" language mode a given file is actually under. A Helm
+ * chart template in particular commonly carries languageId "helm" from a
+ * separate, syntax-highlighting-only extension that never registers any
+ * indentation rules at all, so pressing Enter after `spec:` does nothing
+ * -- not specific to this extension, but exactly the shape of file it
+ * treats as first-class, so worth compensating for here regardless of
+ * root cause. `vscode.languages.setLanguageConfiguration` calls from
+ * different extensions for the same language are additive (each is
+ * consulted, not last-one-wins), so this can't clobber another
+ * extension's own comment/bracket/folding config for "yaml" -- it only
+ * ever adds these two rules on top.
+ */
+const YAML_ON_ENTER_RULES: vscode.OnEnterRule[] = [
+  {
+    // A mapping key with nothing (or only a comment) after its colon, e.g. "spec:" or
+    // "- name:" -- the value is expected on the next, more deeply indented line.
+    beforeText: /^\s*(-\s+)?[^\s:#][^:#]*:\s*(#.*)?$/,
+    action: { indentAction: vscode.IndentAction.Indent },
+  },
+  {
+    // A fresh sequence item marker with nothing after it yet, e.g. "- " about to get its own
+    // "name: ..." on the same line, or a nested block on the next.
+    beforeText: /^\s*-\s*$/,
+    action: { indentAction: vscode.IndentAction.Indent },
+  },
+];
+
 let diagnosticCollection: vscode.DiagnosticCollection;
 let statusBar: TektonStatusBar;
 /** Absolute path to the bundled `schemas/` directory (see `jsonSchemas.ts`) -- set once in `activate` from `context.extensionPath`, which is reliable regardless of whether the extension is running bundled (`dist/extension.js`) or, in development, unbundled. */
@@ -70,6 +102,11 @@ export function activate(context: vscode.ExtensionContext): void {
   statusBar = new TektonStatusBar();
   const workspaceIndex = new TektonWorkspaceIndex();
   context.subscriptions.push(diagnosticCollection, statusBar, workspaceIndex);
+
+  context.subscriptions.push(
+    vscode.languages.setLanguageConfiguration("yaml", { onEnterRules: YAML_ON_ENTER_RULES }),
+    vscode.languages.setLanguageConfiguration("helm", { onEnterRules: YAML_ON_ENTER_RULES })
+  );
 
   const scheduleRefresh = (document: vscode.TextDocument) => {
     const key = document.uri.toString();
