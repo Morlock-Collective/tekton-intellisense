@@ -24,33 +24,49 @@ const YAML_LIKE = /\.(ya?ml)$/i;
  * This extension owns no language of its own -- it only injects a grammar
  * into "source.yaml"/"text.html.markdown" for `$(...)` highlighting (see
  * `package.json`'s `contributes.grammars`) -- so auto-indent-on-Enter
- * behavior normally comes entirely from whichever extension registered
- * the "yaml"/"helm" language mode a given file is actually under. A Helm
- * chart template in particular commonly carries languageId "helm" from a
- * separate, syntax-highlighting-only extension that never registers any
- * indentation rules at all, so pressing Enter after `spec:` does nothing
- * -- not specific to this extension, but exactly the shape of file it
- * treats as first-class, so worth compensating for here regardless of
- * root cause. `vscode.languages.setLanguageConfiguration` calls from
- * different extensions for the same language are additive (each is
- * consulted, not last-one-wins), so this can't clobber another
- * extension's own comment/bracket/folding config for "yaml" -- it only
- * ever adds these two rules on top.
+ * behavior normally comes entirely from whichever extension registered the
+ * "yaml" language mode a given file is under. In practice, plain "yaml"
+ * documents don't get "increase indent after a mapping key" for free:
+ * `vscode.languages.setLanguageConfiguration("yaml", { onEnterRules })`
+ * alone (tried first, see git history) never actually took effect --
+ * confirmed live, not just suspected -- so whatever's already registered
+ * for "yaml" apparently wins outright rather than the two being combined.
+ * Overriding the Enter key directly, scoped to `editorLangId == yaml`
+ * (see `package.json`'s `contributes.keybindings`), sidesteps that
+ * uncertainty entirely: this command decides the indentation itself,
+ * unconditionally, rather than hoping to be consulted.
  */
-const YAML_ON_ENTER_RULES: vscode.OnEnterRule[] = [
-  {
-    // A mapping key with nothing (or only a comment) after its colon, e.g. "spec:" or
-    // "- name:" -- the value is expected on the next, more deeply indented line.
-    beforeText: /^\s*(-\s+)?[^\s:#][^:#]*:\s*(#.*)?$/,
-    action: { indentAction: vscode.IndentAction.Indent },
-  },
-  {
-    // A fresh sequence item marker with nothing after it yet, e.g. "- " about to get its own
-    // "name: ..." on the same line, or a nested block on the next.
-    beforeText: /^\s*-\s*$/,
-    action: { indentAction: vscode.IndentAction.Indent },
-  },
+const INCREASE_INDENT_BEFORE_TEXT = [
+  // A mapping key with nothing (or only a comment) after its colon, e.g. "spec:" or
+  // "- name:" -- the value is expected on the next, more deeply indented line.
+  /^\s*(-\s+)?[^\s:#][^:#]*:\s*(#.*)?$/,
+  // A fresh sequence item marker with nothing after it yet, e.g. "- " about to get its own
+  // "name: ..." on the same line, or a nested block on the next.
+  /^\s*-\s*$/,
 ];
+
+/** What pressing Enter at `position` should insert: a newline, the current line's own indentation carried down (standard auto-indent), and one more level on top of that when the text before the cursor matches one of `INCREASE_INDENT_BEFORE_TEXT`. */
+function enterInsertion(document: vscode.TextDocument, position: vscode.Position): string {
+  const line = document.lineAt(position.line).text;
+  const beforeCursor = line.slice(0, position.character);
+  const currentIndent = /^[ \t]*/.exec(line)![0];
+  const increase = INCREASE_INDENT_BEFORE_TEXT.some((re) => re.test(beforeCursor));
+  return "\n" + currentIndent + (increase ? "  " : "");
+}
+
+/** Registered on Enter for editorLangId == yaml (see `package.json`) -- see the module-level doc comment above for why this exists instead of a plain `setLanguageConfiguration` call. Falls back to plain newline insertion if there's no active editor (shouldn't happen given the keybinding's own `when` clause, but `editor.edit` needs one regardless). */
+async function smartEnterCommand(): Promise<void> {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor) return;
+  const document = editor.document;
+  const insertions = editor.selections.map((selection) => enterInsertion(document, selection.active));
+  await editor.edit((builder) => {
+    editor.selections.forEach((selection, i) => {
+      builder.delete(selection);
+      builder.insert(selection.active, insertions[i]);
+    });
+  });
+}
 
 let diagnosticCollection: vscode.DiagnosticCollection;
 let statusBar: TektonStatusBar;
@@ -103,10 +119,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const workspaceIndex = new TektonWorkspaceIndex();
   context.subscriptions.push(diagnosticCollection, statusBar, workspaceIndex);
 
-  context.subscriptions.push(
-    vscode.languages.setLanguageConfiguration("yaml", { onEnterRules: YAML_ON_ENTER_RULES }),
-    vscode.languages.setLanguageConfiguration("helm", { onEnterRules: YAML_ON_ENTER_RULES })
-  );
+  context.subscriptions.push(vscode.commands.registerCommand("tekton-intellisense.smartEnter", smartEnterCommand));
 
   const scheduleRefresh = (document: vscode.TextDocument) => {
     const key = document.uri.toString();

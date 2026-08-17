@@ -68,6 +68,13 @@
         "title": "Tekton: Edit Task Script"
       }
     ],
+    "keybindings": [
+      {
+        "key": "enter",
+        "command": "tekton-intellisense.smartEnter",
+        "when": "editorTextFocus && editorLangId == yaml && !suggestWidgetVisible && !inSnippetMode && !renameInputVisible && !editorReadonly"
+      }
+    ],
     "menus": {
       "editor/context": [
         {
