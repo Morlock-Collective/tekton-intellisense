@@ -1,0 +1,19 @@
+apiVersion: triggers.tekton.dev/v1beta1
+kind: Trigger
+metadata:
+  name: broken-cel-trigger
+spec:
+  interceptors:
+    - ref:
+        name: cel
+      params:
+        - name: filter
+          value: "body.matches('push')"
+        - name: overlays
+          value:
+            - key: broken_sha
+              expression: "1 >= 2 . true"
+  bindings:
+    - ref: github-binding
+  template:
+    ref: build-template

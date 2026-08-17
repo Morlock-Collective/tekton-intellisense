@@ -347,6 +347,73 @@ function interceptorNames(seq: YAMLSeq | undefined): string[] {
   return out;
 }
 
+/** A `cel` interceptor's `filter` or one `overlays[].expression` value — see {@link findCelExpressions}. */
+export interface CelExprLocation {
+  value: string;
+  range: [number, number];
+}
+
+/** `interceptors[]` items whose `ref.name` is `cel`, pulling out `filter` and each `overlays[].expression`. */
+function celExpressionsFromInterceptors(seq: YAMLSeq | undefined): CelExprLocation[] {
+  const out: CelExprLocation[] = [];
+  if (!seq) return out;
+  for (const item of seq.items) {
+    const m = mapOf(item);
+    if (!m) continue;
+    const ref = refNameAndRange(m, "ref");
+    if (ref.name !== "cel") continue;
+
+    for (const p of seqOf(m.get("params", true))?.items ?? []) {
+      const pm = mapOf(p);
+      if (!pm) continue;
+      const paramName = scalarString(pm.get("name", true));
+      const valueNode = pm.get("value", true);
+
+      if (paramName === "filter") {
+        const value = scalarString(valueNode);
+        const range = scalarRange(valueNode);
+        if (value !== undefined && range) out.push({ value, range });
+      } else if (paramName === "overlays") {
+        for (const o of seqOf(valueNode)?.items ?? []) {
+          const exprNode = mapOf(o)?.get("expression", true);
+          const value = scalarString(exprNode);
+          const range = scalarRange(exprNode);
+          if (value !== undefined && range) out.push({ value, range });
+        }
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Every `cel` interceptor expression (`filter` + `overlays[].expression`) in
+ * `parsed` — from an EventListener's inline `spec.triggers[].interceptors`,
+ * or a standalone Trigger's own `spec.interceptors`. Re-walks the AST
+ * directly (rather than riding on `TektonSymbols`, which only tracks
+ * interceptor *names*) since callers need the expression text and its
+ * source range, not just that a `cel` interceptor is present.
+ */
+export function findCelExpressions(parsed: ParsedTektonDoc): CelExprLocation[] {
+  const root = mapOf(parsed.doc.contents);
+  const spec = mapOf(root?.get("spec", true));
+  if (!spec) return [];
+
+  if (parsed.symbols.kind === "EventListener") {
+    const out: CelExprLocation[] = [];
+    for (const item of seqOf(spec.get("triggers", true))?.items ?? []) {
+      out.push(...celExpressionsFromInterceptors(seqOf(mapOf(item)?.get("interceptors", true))));
+    }
+    return out;
+  }
+
+  if (parsed.symbols.kind === "Trigger") {
+    return celExpressionsFromInterceptors(seqOf(spec.get("interceptors", true)));
+  }
+
+  return [];
+}
+
 function triggerEntries(seq: YAMLSeq | undefined): TriggerEntrySymbol[] {
   const out: TriggerEntrySymbol[] = [];
   forEachNamedItem(seq, (m, name, range) => {

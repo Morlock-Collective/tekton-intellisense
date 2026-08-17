@@ -1,11 +1,12 @@
 import * as vscode from "vscode";
-import { NamedSymbol, ParamSymbol, ParsedTektonDoc, parseTektonFile, RefName, TektonSymbols } from "./model";
+import { NamedSymbol, ParamSymbol, ParsedTektonDoc, parseTektonFile, RefName, TektonSymbols, findCelExpressions } from "./model";
 import { paramRefsIn, ParamRef } from "./paramRefs";
 import { closestMatch } from "./levenshtein";
 import { findDuplicateGroups } from "./duplicates";
 import { findMissingRunAfter } from "./runAfterCheck";
 import { TektonWorkspaceIndex } from "./workspaceIndex";
 import { validateAgainstSchema } from "./schemaValidation";
+import { celIssuesInSource } from "./celExpr";
 
 export const DIAGNOSTIC_SOURCE = "tekton-intellisense";
 
@@ -440,6 +441,27 @@ function checkSchema(document: vscode.TextDocument, parsed: ParsedTektonDoc, sch
   });
 }
 
+/**
+ * Rudimentary structural checks on `cel` interceptor `filter`/`overlays[].expression`
+ * strings — see `celExpr.ts` for why this is a tokenizer-level check rather
+ * than a real CEL parser.
+ */
+function checkCelExpressions(document: vscode.TextDocument, parsed: ParsedTektonDoc): vscode.Diagnostic[] {
+  const diagnostics: vscode.Diagnostic[] = [];
+  for (const loc of findCelExpressions(parsed)) {
+    for (const { range, message } of celIssuesInSource(parsed.text, loc.range, loc.value)) {
+      const diagnostic = new vscode.Diagnostic(
+        new vscode.Range(offsetToPosition(document, range[0]), offsetToPosition(document, range[1])),
+        `CEL expression: ${message}`,
+        vscode.DiagnosticSeverity.Warning
+      );
+      diagnostic.source = DIAGNOSTIC_SOURCE;
+      diagnostics.push(diagnostic);
+    }
+  }
+  return diagnostics;
+}
+
 /** Every diagnostic for one resource within a (possibly multi-document) file. */
 function computeResourceDiagnostics(
   document: vscode.TextDocument,
@@ -460,6 +482,7 @@ function computeResourceDiagnostics(
     ...checkMissingRunAfter(document, parsed),
     ...checkTriggerRefs(document, parsed.symbols, workspaceIndex),
     ...checkTriggerTemplateParamWiring(document, parsed.symbols, workspaceIndex),
+    ...checkCelExpressions(document, parsed),
     ...(config.get<boolean>("enableSchemaValidation", true) ? checkSchema(document, parsed, schemasDir) : []),
   ];
 

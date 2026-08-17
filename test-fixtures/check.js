@@ -36,6 +36,8 @@ const {
   triggerRefIdentityEdits,
 } = require("../out/tekton/renameTarget");
 const { validateAgainstSchema } = require("../out/tekton/schemaValidation");
+const { checkCelExpression, celIssuesInSource } = require("../out/tekton/celExpr");
+const { findCelExpressions } = require("../out/tekton/model");
 const YAML = require("yaml");
 const SCHEMAS_DIR = path.join(__dirname, "..", "schemas");
 
@@ -2696,6 +2698,104 @@ spec:
   const okNoSchema = noSchemaIssues.length === 0;
   console.log(`  [${okNoSchema ? "PASS" : "FAIL"}] no schema for this kind -- silently skipped, not guessed at (${JSON.stringify(noSchemaIssues)})`);
   if (!okNoSchema) failures++;
+}
+
+console.log("\nCEL expression tokenizer (celExpr.ts): balanced input, no false positives:");
+{
+  const cases = [
+    "body.matches('push')",
+    "header.match('X-GitHub-Event', 'push')",
+    "1 + 2.5e-3 * body.count",
+    "truncate(body.head_commit.id, 7)",
+    "body.labels.exists(x, x.name == 'test-b')",
+    "'has escaped \\' quote'",
+    "!body.draft",
+    "-body.count == 0",
+    "body.repository.owner in ['tektoncd', 'other-org']",
+    "0x1A + 2",
+    "has(body.head_commit) ? body.head_commit.id : 'none'",
+    "{a: 1, b: 2}",
+    "body.draft == true",
+    "body.count == null",
+    "1 >= 2 ? 'a' : 'b'", // same-kind literal branches: not a mismatch
+    "1 >= 2 ? true : body.draft", // one branch unknown-typed: can't tell, must not guess
+  ];
+  let ok = true;
+  for (const expr of cases) {
+    const issues = checkCelExpression(expr);
+    if (issues.length !== 0) {
+      ok = false;
+      console.log(`  unexpected issues for ${JSON.stringify(expr)}: ${JSON.stringify(issues)}`);
+    }
+  }
+  console.log(`  [${ok ? "PASS" : "FAIL"}] every valid expression produces zero issues`);
+  if (!ok) failures++;
+}
+
+console.log("\nCEL expression tokenizer: catches unbalanced delimiters, unterminated strings, empty input:");
+{
+  const cases = [
+    ["body.matches('push'", 'Expected ")"'],
+    ["'unterminated", "Unterminated string literal"],
+    ["body.count)", 'Unexpected token ")"'],
+    ["   ", "Empty CEL expression"],
+    // trailing/leading dangling operator -- the case a live user ran into (a comparison typed
+    // halfway through)
+    ["'$(body.somevalue)' ==", "expression ended"],
+    ["body.count &&", "expression ended"],
+    ["== body.count", 'Unexpected token "=="'],
+    // two operands with nothing joining them -- the old character-level heuristic deliberately
+    // never checked this (false-positive risk against the "in" operator), a real parser rejects
+    // it for free
+    ["foo bar", 'Unexpected token "bar"'],
+    ["1 2", 'Unexpected token "2"'],
+    // "true"/"false"/"null" are literal tokens, not identifiers -- a member name has to be a
+    // real one, so this is rejected the same way "2.5.foo" would be, no type-checking involved
+    ["1 >= 2 . true", 'Expected a field/method name after "."'],
+    // ternary branches with directly-visible, differing literal types -- caught without any
+    // general type inference, since both sides reduce to exactly one literal token
+    ["1 >= 2 ? true : 234", 'different types ("bool" vs "number")'],
+    ["1 >= 2 ? 'a' : 234", 'different types ("string" vs "number")'],
+  ];
+  let ok = true;
+  for (const [expr, expectedSubstring] of cases) {
+    const issues = checkCelExpression(expr);
+    const found = issues.some((i) => i.message.includes(expectedSubstring));
+    if (!found) {
+      ok = false;
+      console.log(`  ${JSON.stringify(expr)}: expected an issue containing ${JSON.stringify(expectedSubstring)}, got ${JSON.stringify(issues)}`);
+    }
+  }
+  console.log(`  [${ok ? "PASS" : "FAIL"}] every broken expression flagged`);
+  if (!ok) failures++;
+}
+
+console.log("\nCEL expression extraction + source mapping (model.ts findCelExpressions / celExpr.ts celIssuesInSource):");
+{
+  const validParsed = parseTektonDocument(fs.readFileSync(path.join(__dirname, "trigger.yaml"), "utf8"));
+  const validLocs = findCelExpressions(validParsed);
+  const validIssues = validLocs.flatMap((loc) => celIssuesInSource(validParsed.text, loc.range, loc.value));
+  const okValid = validLocs.length === 1 && validLocs[0].value === "header.match('X-GitHub-Event', 'push')" && validIssues.length === 0;
+  console.log(`  [${okValid ? "PASS" : "FAIL"}] trigger.yaml: 1 filter expression found, no issues (${JSON.stringify(validLocs)})`);
+  if (!okValid) failures++;
+
+  // filter is valid CEL; the overlay expression has a real bug -- "true" is a literal token, not
+  // an identifier, so it can't be a member name (the exact case a live user ran into).
+  const brokenParsed = parseTektonDocument(fs.readFileSync(path.join(__dirname, "trigger-cel-invalid.yaml"), "utf8"));
+  const brokenLocs = findCelExpressions(brokenParsed);
+  const brokenIssues = brokenLocs.flatMap((loc) => celIssuesInSource(brokenParsed.text, loc.range, loc.value));
+  const okBroken =
+    brokenLocs.length === 2 &&
+    brokenIssues.length === 1 &&
+    brokenIssues[0].message.includes('field/method name after "."');
+  // The reported range must land within the overlay expression's quoted value in the source, not
+  // fall back to the whole-scalar range -- this fixture has no escapes, so precise mapping
+  // should always succeed.
+  const overlayLoc = brokenLocs[1];
+  const precise =
+    overlayLoc && brokenIssues[0] && brokenIssues[0].range[0] >= overlayLoc.range[0] && brokenIssues[0].range[1] <= overlayLoc.range[1];
+  console.log(`  [${okBroken && precise ? "PASS" : "FAIL"}] trigger-cel-invalid.yaml: 2 expressions, 1 issue (trailing operator), precisely positioned (${JSON.stringify(brokenIssues)})`);
+  if (!okBroken || !precise) failures++;
 }
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) FAILED.`);

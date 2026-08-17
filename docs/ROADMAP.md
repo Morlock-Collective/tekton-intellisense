@@ -282,6 +282,45 @@ recovers the single most common case (typing at the end of an existing
 block) at the cost of not being able to tell "still this block" from
 "starting a new, more deeply nested one" from a blank line alone.
 
+**CEL expression validation** (`celExpr.ts`) — flags syntactically broken
+`cel` interceptor expressions (`filter`, each `overlays[].expression`) in
+EventListener triggers and standalone Trigger resources, via a real
+recursive-descent parser against CEL's published grammar
+(google/cel-spec). Not semantic validation — param types aren't known
+statically (Tekton doesn't type `body`/`header` beyond "some JSON"), so
+this never rejects on type grounds, only on shapes no CEL program can
+have regardless of types. Chosen over the one CEL-aware npm package
+(`cel-js`) after confirming its public API exposes only string error
+messages with no token/offset information, which would leave every
+diagnostic anchored at the whole expression regardless of the ~160KB it'd
+add to the bundle — a hand-rolled parser costs nothing extra and reports
+the exact token that didn't fit.
+
+An earlier version of this was a pile of character-level heuristics
+(bracket balance, string termination, then a bolted-on "can't start/end
+on an operator" check added after live testing found a gap: a trailing
+`==` with nothing after it went unflagged). That approach kept finding
+new gaps one report at a time — a real parser closes the whole class at
+once (e.g. two adjacent operands with no operator between them, which
+the heuristic never checked at all since a generic adjacency rule risks
+a false positive against CEL's `in` operator). Maps issues back to
+precise source ranges by re-slicing the raw text at the scalar's decoded
+value and verifying the match — falling back to the whole-scalar range
+only for the rare case (escaped quotes, block scalars) it can't map
+exactly, rather than ever guessing a wrong position.
+
+Two more checks ride on the parser without becoming real type-checking:
+`true`/`false`/`null` are lexed as their own literal token type rather
+than as identifiers, matching CEL's actual grammar — so `2.true` is
+rejected the same way `2.foo(` would be (a member name has to be a real
+identifier), no type inference involved. And each precedence level
+optionally returns a "this reduced to exactly one literal token, nothing
+else" result bubbled up from `parsePrimary`, which lets the ternary
+production compare its two branches' literal kinds when *both* happen to
+be bare literals (`cond ? true : 234` — bool vs number, rejected) while
+backing off the moment either branch is anything else (a param, a member
+access, a call) rather than guessing at a type it can't know.
+
 ## Notable bugs found and fixed along the way
 
 - Multi-line inserts only indented their first line correctly; the trailing

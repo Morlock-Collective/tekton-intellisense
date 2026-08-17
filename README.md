@@ -28,6 +28,9 @@ of future improvement.
   files too, without flagging a masked `{{ ... }}` value as the wrong type.
 - **Schema-aware completion** — suggests valid keys wherever the cursor is (e.g. `script`/`image`
   inside a step), not just inside `$(...)`.
+- **CEL expression validation** — flags syntactically broken `cel` interceptor expressions
+  (`filter`, `overlays[].expression`) in Triggers resources, via a real parser against CEL's
+  grammar (not just bracket/quote balance).
 - **Missing-`runAfter` hint** — an informative hint if omitting runAfter when 
   referencing the result from an earlier task (if the user wants to make the order explicit).
 - **Tekton Triggers support** — `EventListener`/`Trigger`/`TriggerTemplate`/
