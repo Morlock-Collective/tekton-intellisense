@@ -372,21 +372,31 @@ export function resolveIdentityRecord(
   workspaceIndex: TektonWorkspaceIndex,
   target: RenameTarget
 ): { record: IndexedResource; kindLabel: string } | undefined {
-  const lookup = ((): { record: IndexedResource | undefined; kindLabel: string } | undefined => {
-    switch (target.kind) {
-      case "task-identity":
-        return { record: workspaceIndex.lookupTaskRecord(target.name), kindLabel: "Task" };
-      case "pipeline-identity":
-        return { record: workspaceIndex.lookupPipelineRecord(target.name), kindLabel: "Pipeline" };
-      case "template-identity":
-        return { record: workspaceIndex.lookupTriggerTemplateRecord(target.name), kindLabel: "TriggerTemplate" };
-      case "binding-identity":
-        return { record: workspaceIndex.lookupTriggerBindingRecord(target.name), kindLabel: "TriggerBinding" };
-      case "trigger-identity":
-        return { record: workspaceIndex.lookupTriggerRecord(target.name), kindLabel: "Trigger" };
-      default:
-        return undefined;
-    }
-  })();
-  return lookup?.record ? { record: lookup.record, kindLabel: lookup.kindLabel } : undefined;
+  let record: IndexedResource | undefined;
+  let kindLabel: string;
+  switch (target.kind) {
+    case "task-identity":
+      record = workspaceIndex.lookupTaskRecord(target.name);
+      kindLabel = "Task";
+      break;
+    case "pipeline-identity":
+      record = workspaceIndex.lookupPipelineRecord(target.name);
+      kindLabel = "Pipeline";
+      break;
+    case "template-identity":
+      record = workspaceIndex.lookupTriggerTemplateRecord(target.name);
+      kindLabel = "TriggerTemplate";
+      break;
+    case "binding-identity":
+      record = workspaceIndex.lookupTriggerBindingRecord(target.name);
+      kindLabel = "TriggerBinding";
+      break;
+    case "trigger-identity":
+      record = workspaceIndex.lookupTriggerRecord(target.name);
+      kindLabel = "Trigger";
+      break;
+    default:
+      return undefined;
+  }
+  return record ? { record, kindLabel } : undefined;
 }
