@@ -316,6 +316,14 @@ could reference the same Task).
       binding (when using `pipelineRef`) should cross-file-rename against
       its Pipeline's declared param, same shape as the Task-param rename
       just added one level down.
+- [ ] JSON Schema-driven validation/completion/hover: `schemas/` now has a
+      curated, verified set of draft-07 schemas for every kind this
+      extension recognizes (see `schemas/README.md` for scope/provenance),
+      but nothing in `src/` consumes them yet. Figuring out how they'd
+      layer against the existing hand-rolled domain model (redundant with
+      it in places — structural typo-catching — complementary in others —
+      full field enumeration this extension doesn't attempt today) is the
+      open design question, not just the wiring.
 
 Publishing to the VS Code Marketplace / Open VSX is being done manually by
 the maintainer once a release is judged stable — not tracked here.
