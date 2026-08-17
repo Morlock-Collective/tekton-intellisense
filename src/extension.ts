@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import * as path from "path";
 import { computeDiagnostics, DIAGNOSTIC_SOURCE } from "./tekton/diagnostics";
 import { TektonRefCodeActionProvider } from "./tekton/codeActions";
 import { parseTektonFile, findResourceAt } from "./tekton/model";
@@ -21,6 +22,8 @@ const YAML_LIKE = /\.(ya?ml)$/i;
 
 let diagnosticCollection: vscode.DiagnosticCollection;
 let statusBar: TektonStatusBar;
+/** Absolute path to the bundled `schemas/` directory (see `jsonSchemas.ts`) -- set once in `activate` from `context.extensionPath`, which is reliable regardless of whether the extension is running bundled (`dist/extension.js`) or, in development, unbundled. */
+let schemasDir: string;
 
 const refreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
 let indexChangeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -36,7 +39,7 @@ function looksLikeYaml(document: vscode.TextDocument): boolean {
 function refreshDiagnostics(document: vscode.TextDocument, workspaceIndex: TektonWorkspaceIndex): void {
   if (!looksLikeYaml(document)) return;
   try {
-    diagnosticCollection.set(document.uri, computeDiagnostics(document, workspaceIndex));
+    diagnosticCollection.set(document.uri, computeDiagnostics(document, workspaceIndex, schemasDir));
   } catch (err) {
     // Never let a parsing edge case break the editing session.
     console.error("tekton-intellisense: failed to compute diagnostics", err);
@@ -63,6 +66,7 @@ function refreshActiveEditorState(editor: vscode.TextEditor | undefined): void {
 
 export function activate(context: vscode.ExtensionContext): void {
   diagnosticCollection = vscode.languages.createDiagnosticCollection(DIAGNOSTIC_SOURCE);
+  schemasDir = path.join(context.extensionPath, "schemas");
   statusBar = new TektonStatusBar();
   const workspaceIndex = new TektonWorkspaceIndex();
   context.subscriptions.push(diagnosticCollection, statusBar, workspaceIndex);

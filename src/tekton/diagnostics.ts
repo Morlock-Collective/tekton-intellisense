@@ -5,6 +5,7 @@ import { closestMatch } from "./levenshtein";
 import { findDuplicateGroups } from "./duplicates";
 import { findMissingRunAfter } from "./runAfterCheck";
 import { TektonWorkspaceIndex } from "./workspaceIndex";
+import { validateAgainstSchema } from "./schemaValidation";
 
 export const DIAGNOSTIC_SOURCE = "tekton-intellisense";
 
@@ -438,12 +439,35 @@ function checkRef(
   }
 }
 
+/**
+ * Structural validation against the matching schema in `schemas/` (see
+ * `schemaValidation.ts`) -- unknown/missing keys, wrong types and enums.
+ * Complementary to every other check in this file, which all validate
+ * cross-*reference* correctness (does this name resolve to something) that
+ * a static schema can't express at all; this is the other half, catching
+ * a mistake as simple as `scirpt:` that every other check would happily
+ * ignore since it's a syntactically fine, just-unrecognized YAML key.
+ */
+function checkSchema(document: vscode.TextDocument, parsed: ParsedTektonDoc, schemasDir: string): vscode.Diagnostic[] {
+  return validateAgainstSchema(schemasDir, parsed).map(({ range, message }) => {
+    const diagnostic = new vscode.Diagnostic(
+      new vscode.Range(offsetToPosition(document, range[0]), offsetToPosition(document, range[1])),
+      message,
+      vscode.DiagnosticSeverity.Warning
+    );
+    diagnostic.source = DIAGNOSTIC_SOURCE;
+    return diagnostic;
+  });
+}
+
 /** Every diagnostic for one resource within a (possibly multi-document) file. */
 function computeResourceDiagnostics(
   document: vscode.TextDocument,
   parsed: ParsedTektonDoc,
-  workspaceIndex: TektonWorkspaceIndex
+  workspaceIndex: TektonWorkspaceIndex,
+  schemasDir: string
 ): vscode.Diagnostic[] {
+  const config = vscode.workspace.getConfiguration("tektonIntellisense");
   const diagnostics: vscode.Diagnostic[] = [
     ...checkDuplicateNames(document, parsed.symbols.params, "parameter"),
     ...checkDuplicateNames(document, parsed.symbols.workspaces, "workspace"),
@@ -456,6 +480,7 @@ function computeResourceDiagnostics(
     ...checkMissingRunAfter(document, parsed),
     ...checkTriggerRefs(document, parsed.symbols, workspaceIndex),
     ...checkTriggerTemplateParamWiring(document, parsed.symbols, workspaceIndex),
+    ...(config.get<boolean>("enableSchemaValidation", true) ? checkSchema(document, parsed, schemasDir) : []),
   ];
 
   for (const ref of paramRefsIn(parsed)) {
@@ -483,10 +508,10 @@ function computeResourceDiagnostics(
 }
 
 /** Computes diagnostics across every `---`-separated resource in the file, concatenated — a multi-document file gets each of its resources checked independently, on its own symbol table. */
-export function computeDiagnostics(document: vscode.TextDocument, workspaceIndex: TektonWorkspaceIndex): vscode.Diagnostic[] {
+export function computeDiagnostics(document: vscode.TextDocument, workspaceIndex: TektonWorkspaceIndex, schemasDir: string): vscode.Diagnostic[] {
   const config = vscode.workspace.getConfiguration("tektonIntellisense");
   if (!config.get<boolean>("enableDiagnostics", true)) return [];
 
   const docs = parseTektonFile(document.getText());
-  return docs.flatMap((parsed) => computeResourceDiagnostics(document, parsed, workspaceIndex));
+  return docs.flatMap((parsed) => computeResourceDiagnostics(document, parsed, workspaceIndex, schemasDir));
 }

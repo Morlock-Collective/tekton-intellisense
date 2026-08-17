@@ -35,7 +35,9 @@ const {
   bindingRefIdentityEdits,
   triggerRefIdentityEdits,
 } = require("../out/tekton/renameTarget");
+const { validateAgainstSchema } = require("../out/tekton/schemaValidation");
 const YAML = require("yaml");
+const SCHEMAS_DIR = path.join(__dirname, "..", "schemas");
 
 let failures = 0;
 
@@ -2452,6 +2454,119 @@ console.log("\nHighlighting: identity system + plain-scalar bindings decorated s
     console.log(eventListener);
     failures++;
   }
+}
+
+console.log("\nSchema validation: structural checks against schemas/ (unknown/missing keys, wrong types/enums):");
+{
+  // Every real fixture in this directory should validate clean -- a failure here means either a
+  // real bug in the extracted schemas, or a fixture that's (legitimately or not) using something
+  // schemas/ doesn't know about yet.
+  const files = fs.readdirSync(__dirname).filter((f) => f.endsWith(".yaml") || f.endsWith(".yml"));
+  const unexpected = [];
+  for (const file of files) {
+    const text = fs.readFileSync(path.join(__dirname, file), "utf8");
+    let docs;
+    try {
+      docs = parseTektonFile(text);
+    } catch {
+      continue;
+    }
+    for (const parsed of docs) {
+      for (const issue of validateAgainstSchema(SCHEMAS_DIR, parsed)) {
+        unexpected.push({ file, kind: parsed.symbols.kind, name: parsed.symbols.metadataName, ...issue });
+      }
+    }
+  }
+  const okFixtures = unexpected.length === 0;
+  console.log(`  [${okFixtures ? "PASS" : "FAIL"}] every real fixture validates clean (${unexpected.length} unexpected issue(s))`);
+  if (!okFixtures) {
+    console.log(unexpected);
+    failures++;
+  }
+
+  // Unknown key: additionalProperties isn't set by the Kubernetes-generated schemas this extracts
+  // from (see jsonSchemas.ts's tightenAdditionalProperties) -- this is the whole point of adding it.
+  const typoTask = `apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: bad-task
+spec:
+  steps:
+    - name: build
+      scirpt: echo hi
+`;
+  const typoIssues = validateAgainstSchema(SCHEMAS_DIR, parseTektonDocument(typoTask));
+  const okTypo = typoIssues.length === 1 && typoIssues[0].message.includes('"scirpt"') && typoTask.slice(...typoIssues[0].range) === "scirpt";
+  console.log(`  [${okTypo ? "PASS" : "FAIL"}] unknown key "scirpt" flagged, anchored at the key itself (${JSON.stringify(typoIssues)})`);
+  if (!okTypo) failures++;
+
+  // Missing required key: anchored at the enclosing object, since there's no node for a key that
+  // isn't there.
+  const missingReqTask = `apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: bad-task
+spec:
+  params:
+    - type: string
+  steps:
+    - name: build
+      script: echo hi
+`;
+  const missingIssues = validateAgainstSchema(SCHEMAS_DIR, parseTektonDocument(missingReqTask));
+  const okMissing = missingIssues.length === 1 && missingIssues[0].message.includes('"name"');
+  console.log(`  [${okMissing ? "PASS" : "FAIL"}] missing required key "name" flagged (${JSON.stringify(missingIssues)})`);
+  if (!okMissing) failures++;
+
+  // Bad enum value.
+  const badEnumTrigger = `apiVersion: triggers.tekton.dev/v1beta1
+kind: Trigger
+metadata:
+  name: t
+spec:
+  bindings:
+    - ref: b
+      kind: NotAKind
+  template:
+    ref: tmpl
+`;
+  const enumIssues = validateAgainstSchema(SCHEMAS_DIR, parseTektonDocument(badEnumTrigger));
+  const okEnum = enumIssues.length === 1 && badEnumTrigger.slice(...enumIssues[0].range) === "NotAKind";
+  console.log(`  [${okEnum ? "PASS" : "FAIL"}] bad enum value flagged, anchored at the offending value (${JSON.stringify(enumIssues)})`);
+  if (!okEnum) failures++;
+
+  // Helm-masked values (a standalone directive collapsing to null, or an inline one masking to a
+  // same-length run of x's) must not produce false positives -- this extension can't know what a
+  // template will actually render to, so it shouldn't guess.
+  const helmTask = `apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: {{ include "mychart.fullname" . }}-build
+  labels:
+    {{- include "mychart.labels" . | nindent 4 }}
+spec:
+  steps:
+    - name: build
+      script: echo hi
+`;
+  const helmIssues = validateAgainstSchema(SCHEMAS_DIR, parseTektonDocument(helmTask));
+  const okHelm = helmIssues.length === 0;
+  console.log(`  [${okHelm ? "PASS" : "FAIL"}] Helm-masked values (collapsed-to-null and inline x-run) don't produce false positives (${JSON.stringify(helmIssues)})`);
+  if (!okHelm) failures++;
+
+  // No schema known for this (kind, apiVersion) pair (ClusterTask has none at all) -- empty, not
+  // an error.
+  const clusterTask = `apiVersion: tekton.dev/v1
+kind: ClusterTask
+metadata:
+  name: whatever-goes
+spec:
+  whateverKeyAtAll: true
+`;
+  const noSchemaIssues = validateAgainstSchema(SCHEMAS_DIR, parseTektonDocument(clusterTask));
+  const okNoSchema = noSchemaIssues.length === 0;
+  console.log(`  [${okNoSchema ? "PASS" : "FAIL"}] no schema for this kind -- silently skipped, not guessed at (${JSON.stringify(noSchemaIssues)})`);
+  if (!okNoSchema) failures++;
 }
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) FAILED.`);
