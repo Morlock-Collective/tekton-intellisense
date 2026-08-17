@@ -7,7 +7,6 @@ out/**
 node_modules/**
 test-fixtures/**
 docs/**
-schemas/**
 tsconfig.json
 eslint.config.js
 esbuild.js
