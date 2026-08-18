@@ -438,43 +438,115 @@ export function checkCelExpression(expr: string): CelIssue[] {
 /**
  * Maps {@link checkCelExpression}'s expression-relative issue offsets onto
  * `sourceText`, given the CEL expression's own scalar `nodeRange` (as
- * produced by the `yaml` package — spans the whole scalar, quotes
- * included) and its already-decoded `value`.
+ * produced by the `yaml` package — spans the whole scalar, header line
+ * included for a block style) and its already-decoded `value`. `style` is
+ * the scalar's `Scalar.type` (`model.ts#scalarStyle`) — a block scalar
+ * (`|`/`>`) decodes so differently from a quoted/plain one that the two
+ * need entirely different reconstructions; see {@link mapValueIntoSource}.
  *
- * For the common case (plain, single- or double-quoted scalar with no
- * escape sequences) the decoded value is a verbatim substring of the raw
- * text right after any opening quote, so we can map offsets 1:1 — verified
- * by re-slicing and comparing rather than assumed, so a scalar style this
- * doesn't handle (block literals, escaped quotes) safely falls back to
- * anchoring the whole scalar instead of ever reporting a wrong position.
+ * A mapping this can't handle safely falls back to anchoring the whole
+ * scalar instead of ever reporting a wrong position.
  */
 export function celIssuesInSource(
   sourceText: string,
   nodeRange: [number, number],
-  value: string
+  value: string,
+  style: string | undefined
 ): { range: [number, number]; message: string }[] {
   const issues = checkCelExpression(value);
   if (issues.length === 0) return [];
 
-  const mapping = mapValueIntoSource(sourceText, nodeRange, value);
+  const mapper = mapValueIntoSource(sourceText, nodeRange, value, style);
 
   return issues.map((issue) =>
-    mapping.precise
-      ? { range: [mapping.contentStart + issue.start, mapping.contentStart + issue.end] as [number, number], message: issue.message }
+    mapper
+      ? { range: [mapper(issue.start), mapper(issue.end)] as [number, number], message: issue.message }
       : { range: nodeRange, message: issue.message }
   );
 }
 
-/** Shared by {@link celIssuesInSource} and {@link celHighlightTokensInSource} -- see the doc comment above for what "precise" means and why it's verified rather than assumed. */
-function mapValueIntoSource(
-  sourceText: string,
-  nodeRange: [number, number],
-  value: string
-): { contentStart: number; precise: boolean } {
-  const [nodeStart] = nodeRange;
+type OffsetMapper = (valueOffset: number) => number;
+
+/** Shared by {@link celIssuesInSource} and {@link celHighlightTokensInSource}. Returns undefined (map nothing) rather than guess wherever the reconstruction it tries can't be verified byte-for-byte against `value`. */
+function mapValueIntoSource(sourceText: string, nodeRange: [number, number], value: string, style: string | undefined): OffsetMapper | undefined {
+  const [nodeStart, nodeEnd] = nodeRange;
+
+  if (style === "BLOCK_LITERAL" || style === "BLOCK_FOLDED") {
+    const table = blockScalarLines(sourceText, nodeStart, nodeEnd);
+    if (!table) return undefined;
+    return style === "BLOCK_LITERAL" ? literalOffsetMapper(table, value) : foldedOffsetMapper(table, value);
+  }
+
+  // Plain / single- or double-quoted scalar: the decoded value is a verbatim substring of the
+  // raw text right after any opening quote, when there's nothing needing escaping.
   const quoted = sourceText[nodeStart] === '"' || sourceText[nodeStart] === "'";
   const contentStart = quoted ? nodeStart + 1 : nodeStart;
-  return { contentStart, precise: sourceText.slice(contentStart, contentStart + value.length) === value };
+  if (sourceText.slice(contentStart, contentStart + value.length) !== value) return undefined;
+  return (valueOffset) => contentStart + valueOffset;
+}
+
+interface BlockScalarTable {
+  /** raw source offset each dedented line starts at (i.e. right after its own leading indentation) */
+  hostLineStarts: number[];
+  /** each content line with the block's common leading indentation stripped */
+  dedentedLines: string[];
+  indent: number;
+}
+
+/** Content lines after a block scalar's own header line (`filter: |` / `expression: >`) -- shared groundwork for the literal/folded reconstructions below. Same technique as `scriptEmbed.ts#buildScriptBlock`. */
+function blockScalarLines(sourceText: string, nodeStart: number, nodeEnd: number): BlockScalarTable | undefined {
+  const headerLineEnd = sourceText.indexOf("\n", nodeStart);
+  if (headerLineEnd === -1 || headerLineEnd >= nodeEnd) return undefined;
+  const contentStart = headerLineEnd + 1;
+
+  const rawLines = sourceText.slice(contentStart, nodeEnd).split("\n");
+  const indent = rawLines.find((l) => l.trim().length > 0)?.match(/^[ \t]*/)?.[0].length ?? 0;
+
+  const hostLineStarts: number[] = [];
+  const dedentedLines: string[] = [];
+  let cursor = contentStart;
+  for (const line of rawLines) {
+    hostLineStarts.push(cursor);
+    dedentedLines.push(line.length >= indent ? line.slice(indent) : "");
+    cursor += line.length + 1;
+  }
+  return { hostLineStarts, dedentedLines, indent };
+}
+
+function lineOffsetMapper(table: BlockScalarTable, lines: string[], joinWidth: number): OffsetMapper {
+  const virtualLineStarts: number[] = [];
+  let acc = 0;
+  for (const line of lines) {
+    virtualLineStarts.push(acc);
+    acc += line.length + joinWidth;
+  }
+  return (valueOffset) => {
+    let line = 0;
+    while (line + 1 < virtualLineStarts.length && virtualLineStarts[line + 1] <= valueOffset) line++;
+    return table.hostLineStarts[line] + table.indent + Math.min(valueOffset - virtualLineStarts[line], lines[line].length);
+  };
+}
+
+/** `|`: lines join with "\n" unchanged. Verified against `value` -- default "clip" chomping matches; "-"/"+" chomping variants may not, and safely produce no mapper rather than guess. */
+function literalOffsetMapper(table: BlockScalarTable, value: string): OffsetMapper | undefined {
+  if (table.dedentedLines.join("\n") !== value) return undefined;
+  return lineOffsetMapper(table, table.dedentedLines, 1);
+}
+
+/**
+ * `>`: only the simple, common shape -- one paragraph, no blank lines, nothing indented deeper
+ * than the rest (YAML's real folding rules treat those specially, which this doesn't attempt).
+ * Verified the same way: reconstruct by joining lines with a single space (folding's actual
+ * effect) and compare against `value` byte-for-byte; anything this reconstruction doesn't match
+ * exactly safely produces no mapper rather than guessing at a wrong position.
+ */
+function foldedOffsetMapper(table: BlockScalarTable, value: string): OffsetMapper | undefined {
+  const trailingBlank = table.dedentedLines[table.dedentedLines.length - 1] === "";
+  const body = trailingBlank ? table.dedentedLines.slice(0, -1) : table.dedentedLines;
+  if (body.length === 0 || body.some((l) => l.length === 0)) return undefined; // a blank line mid-content folds differently -- bail rather than guess
+
+  if (body.join(" ") + (trailingBlank ? "\n" : "") !== value) return undefined;
+  return lineOffsetMapper(table, body, 1);
 }
 
 export type CelHighlightTokenType = "string" | "number" | "keyword" | "operator" | "variable" | "function" | "property";
@@ -539,21 +611,22 @@ export function tokenizeCelForHighlighting(expr: string): CelHighlightToken[] {
  * Maps {@link tokenizeCelForHighlighting}'s expression-relative token
  * offsets onto `sourceText`, the same way {@link celIssuesInSource} does
  * for validation issues -- except here, when the mapping can't be verified
- * precise (an escaped quote, a block scalar), highlighting is skipped
- * entirely rather than falling back to the whole-scalar range: unlike a
- * single diagnostic, several overlapping "highlight the whole value"
- * tokens would just look broken.
+ * (an escaped quote, a scalar shape `mapValueIntoSource` doesn't handle),
+ * highlighting is skipped entirely rather than falling back to the
+ * whole-scalar range: unlike a single diagnostic, several overlapping
+ * "highlight the whole value" tokens would just look broken.
  */
 export function celHighlightTokensInSource(
   sourceText: string,
   nodeRange: [number, number],
-  value: string
+  value: string,
+  style: string | undefined
 ): { range: [number, number]; type: CelHighlightTokenType }[] {
   const tokens = tokenizeCelForHighlighting(value);
   if (tokens.length === 0) return [];
 
-  const mapping = mapValueIntoSource(sourceText, nodeRange, value);
-  if (!mapping.precise) return [];
+  const mapper = mapValueIntoSource(sourceText, nodeRange, value, style);
+  if (!mapper) return [];
 
-  return tokens.map((t) => ({ range: [mapping.contentStart + t.start, mapping.contentStart + t.end] as [number, number], type: t.type }));
+  return tokens.map((t) => ({ range: [mapper(t.start), mapper(t.end)] as [number, number], type: t.type }));
 }

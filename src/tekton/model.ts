@@ -1,4 +1,4 @@
-import { Document, LineCounter, parseAllDocuments, YAMLMap, YAMLSeq, isMap, isSeq, isScalar } from "yaml";
+import { Document, LineCounter, parseAllDocuments, Scalar, YAMLMap, YAMLSeq, isMap, isSeq, isScalar } from "yaml";
 import { maskHelmTemplates } from "./helmMask";
 
 export type TektonKind =
@@ -176,6 +176,11 @@ function scalarRange(node: unknown): [number, number] | undefined {
   return isScalar(node) && node.range ? [node.range[0], node.range[1]] : undefined;
 }
 
+/** The scalar's own quoting/block style (`Scalar.PLAIN`/`QUOTE_SINGLE`/`QUOTE_DOUBLE`/`BLOCK_LITERAL`/`BLOCK_FOLDED`) — callers that need to map an offset in the decoded value back to raw source (e.g. `celExpr.ts`) need this, since block styles decode very differently from quoted/plain ones. */
+function scalarStyle(node: unknown): Scalar.Type | undefined {
+  return isScalar(node) ? (node.type as Scalar.Type | undefined) : undefined;
+}
+
 /** Reads a `<key>: { name: ... }` ref field (taskRef, pipelineRef, an interceptor's `ref`) directly under `map`. */
 function refNameAndRange(map: YAMLMap | undefined, key: string): { name?: string; range?: [number, number] } {
   const ref = mapOf(map?.get(key, true));
@@ -351,6 +356,8 @@ function interceptorNames(seq: YAMLSeq | undefined): string[] {
 export interface CelExprLocation {
   value: string;
   range: [number, number];
+  /** the scalar's own quoting/block style — see `scalarStyle` */
+  style: Scalar.Type | undefined;
 }
 
 /** `interceptors[]` items whose `ref.name` is `cel`, pulling out `filter` and each `overlays[].expression`. */
@@ -372,13 +379,13 @@ function celExpressionsFromInterceptors(seq: YAMLSeq | undefined): CelExprLocati
       if (paramName === "filter") {
         const value = scalarString(valueNode);
         const range = scalarRange(valueNode);
-        if (value !== undefined && range) out.push({ value, range });
+        if (value !== undefined && range) out.push({ value, range, style: scalarStyle(valueNode) });
       } else if (paramName === "overlays") {
         for (const o of seqOf(valueNode)?.items ?? []) {
           const exprNode = mapOf(o)?.get("expression", true);
           const value = scalarString(exprNode);
           const range = scalarRange(exprNode);
-          if (value !== undefined && range) out.push({ value, range });
+          if (value !== undefined && range) out.push({ value, range, style: scalarStyle(exprNode) });
         }
       }
     }

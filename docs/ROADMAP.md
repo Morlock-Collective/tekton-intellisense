@@ -325,6 +325,28 @@ expression location, nothing pattern-matched. Uses only VS Code's
 variable/function/property), so themes color them with no extra
 `semanticTokenScopes` contribution needed.
 
+Both validation and highlighting need to map an offset in the CEL
+expression's *decoded* value back to the raw source, to anchor a
+diagnostic or a highlight token precisely. That mapping (`celExpr.ts`'s
+`mapValueIntoSource`) originally only handled plain/quoted scalars
+(verify the decoded value is a literal substring right after any opening
+quote, same "verify not assume" pattern as everywhere else in this
+codebase). A `filter`/`expression` written as a block scalar (`expression:
+|` or `expression: >`) decodes completely differently — falling outside
+that check entirely, so every issue silently fell back to the whole-
+scalar range and highlighting (which can't use that same fallback for
+multiple overlapping tokens) produced nothing at all. Fixed by giving
+block scalars their own per-line reconstruction, mirroring
+`scriptEmbed.ts#buildScriptBlock`'s technique: dedent each content line,
+rebuild what the decoded value *should* be, and only trust the mapping
+if that reconstruction matches the real decoded value byte-for-byte.
+`|` (literal) is exact. `>` (folded) only attempts the common shape —
+one paragraph, no blank lines — since YAML's actual folding rules have
+further exceptions (blank lines, over-indented lines) this doesn't
+attempt to replicate; anything more exotic safely falls back to the
+old whole-scalar/no-highlighting behavior rather than mapping to a
+wrong position.
+
 Two more checks ride on the parser without becoming real type-checking:
 `true`/`false`/`null` are lexed as their own literal token type rather
 than as identifiers, matching CEL's actual grammar — so `2.true` is

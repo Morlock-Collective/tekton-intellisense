@@ -2774,7 +2774,7 @@ console.log("\nCEL expression extraction + source mapping (model.ts findCelExpre
 {
   const validParsed = parseTektonDocument(fs.readFileSync(path.join(__dirname, "trigger.yaml"), "utf8"));
   const validLocs = findCelExpressions(validParsed);
-  const validIssues = validLocs.flatMap((loc) => celIssuesInSource(validParsed.text, loc.range, loc.value));
+  const validIssues = validLocs.flatMap((loc) => celIssuesInSource(validParsed.text, loc.range, loc.value, loc.style));
   const okValid = validLocs.length === 1 && validLocs[0].value === "header.match('X-GitHub-Event', 'push')" && validIssues.length === 0;
   console.log(`  [${okValid ? "PASS" : "FAIL"}] trigger.yaml: 1 filter expression found, no issues (${JSON.stringify(validLocs)})`);
   if (!okValid) failures++;
@@ -2805,7 +2805,7 @@ spec:
 `;
   const brokenParsed = parseTektonDocument(brokenYaml);
   const brokenLocs = findCelExpressions(brokenParsed);
-  const brokenIssues = brokenLocs.flatMap((loc) => celIssuesInSource(brokenParsed.text, loc.range, loc.value));
+  const brokenIssues = brokenLocs.flatMap((loc) => celIssuesInSource(brokenParsed.text, loc.range, loc.value, loc.style));
   const okBroken =
     brokenLocs.length === 2 &&
     brokenIssues.length === 1 &&
@@ -2846,7 +2846,7 @@ console.log("\nCEL highlighting source mapping (celExpr.ts celHighlightTokensInS
 {
   const parsed = parseTektonDocument(fs.readFileSync(path.join(__dirname, "trigger.yaml"), "utf8"));
   const loc = findCelExpressions(parsed)[0]; // header.match('X-GitHub-Event', 'push')
-  const tokens = celHighlightTokensInSource(parsed.text, loc.range, loc.value);
+  const tokens = celHighlightTokensInSource(parsed.text, loc.range, loc.value, loc.style);
   const everyTokenWithinScalar = tokens.every(({ range }) => range[0] >= loc.range[0] && range[1] <= loc.range[1]);
   const everyTokenTextMatches = tokens.every(({ range, type }) => {
     const text = parsed.text.slice(range[0], range[1]);
@@ -2858,6 +2858,80 @@ console.log("\nCEL highlighting source mapping (celExpr.ts celHighlightTokensInS
   const ok = tokens.length > 0 && everyTokenWithinScalar && everyTokenTextMatches;
   console.log(`  [${ok ? "PASS" : "FAIL"}] trigger.yaml filter expression: ${tokens.length} tokens, all within the scalar's own range (${JSON.stringify(tokens.map((t) => ({ type: t.type, text: parsed.text.slice(...t.range) })))})`);
   if (!ok) failures++;
+}
+
+console.log("\nCEL expressions in block scalars (`expression: |` / `expression: >`) -- validation and highlighting both need per-line source mapping, not just the plain/quoted-scalar substring shortcut:");
+{
+  const literalYaml = `apiVersion: triggers.tekton.dev/v1beta1
+kind: Trigger
+metadata:
+  name: block-literal-cel
+spec:
+  interceptors:
+    - ref:
+        name: cel
+      params:
+        - name: overlays
+          value:
+            - key: broken
+              expression: |
+                1 >= 2 . true
+  bindings:
+    - ref: github-binding
+  template:
+    ref: build-template
+`;
+  const literalParsed = parseTektonDocument(literalYaml);
+  const literalLoc = findCelExpressions(literalParsed)[0];
+  const literalIssues = celIssuesInSource(literalParsed.text, literalLoc.range, literalLoc.value, literalLoc.style);
+  // A precise mapping lands strictly inside the content line, not spanning the whole scalar
+  // (which would also cover the "expression: |" header line above it).
+  const literalPrecise =
+    literalIssues.length === 1 &&
+    literalIssues[0].range[0] > literalLoc.range[0] &&
+    literalParsed.text.slice(...literalIssues[0].range) === "true";
+  console.log(
+    `  [${literalPrecise ? "PASS" : "FAIL"}] block literal (|): 1 issue, positioned at the offending token, not the whole scalar (${JSON.stringify(literalIssues.map((i) => ({ ...i, text: literalParsed.text.slice(...i.range) })))})`
+  );
+  if (!literalPrecise) failures++;
+
+  const literalTokens = celHighlightTokensInSource(literalParsed.text, literalLoc.range, literalLoc.value, literalLoc.style);
+  const literalHighlighted = literalTokens.length > 0 && literalTokens.every(({ range }) => literalParsed.text.slice(...range).length > 0);
+  console.log(`  [${literalHighlighted ? "PASS" : "FAIL"}] block literal (|): ${literalTokens.length} highlight tokens produced (used to be silently skipped)`);
+  if (!literalHighlighted) failures++;
+
+  const foldedYaml = `apiVersion: triggers.tekton.dev/v1beta1
+kind: Trigger
+metadata:
+  name: block-folded-cel
+spec:
+  interceptors:
+    - ref:
+        name: cel
+      params:
+        - name: filter
+          value: >
+            body.matches('push')
+            && body.count > 0
+  bindings:
+    - ref: github-binding
+  template:
+    ref: build-template
+`;
+  const foldedParsed = parseTektonDocument(foldedYaml);
+  const foldedLoc = findCelExpressions(foldedParsed)[0];
+  const foldedIssues = celIssuesInSource(foldedParsed.text, foldedLoc.range, foldedLoc.value, foldedLoc.style);
+  const foldedTokens = celHighlightTokensInSource(foldedParsed.text, foldedLoc.range, foldedLoc.value, foldedLoc.style);
+  // valid expression (just folded across two source lines) -- no false positives, and tokens
+  // from the second source line ("&& body.count > 0") should map onto that second line, not
+  // collapse onto the first.
+  const secondLineStart = foldedParsed.text.indexOf("&& body.count");
+  const someTokenOnSecondLine = foldedTokens.some(({ range }) => range[0] >= secondLineStart);
+  const foldedOk = foldedIssues.length === 0 && foldedTokens.length > 0 && someTokenOnSecondLine;
+  console.log(
+    `  [${foldedOk ? "PASS" : "FAIL"}] block folded (>): valid expression across 2 source lines, 0 issues, ${foldedTokens.length} highlight tokens, correctly spanning both lines`
+  );
+  if (!foldedOk) failures++;
 }
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) FAILED.`);

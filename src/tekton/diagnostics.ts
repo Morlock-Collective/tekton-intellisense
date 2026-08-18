@@ -449,7 +449,7 @@ function checkSchema(document: vscode.TextDocument, parsed: ParsedTektonDoc, sch
 function checkCelExpressions(document: vscode.TextDocument, parsed: ParsedTektonDoc): vscode.Diagnostic[] {
   const diagnostics: vscode.Diagnostic[] = [];
   for (const loc of findCelExpressions(parsed)) {
-    for (const { range, message } of celIssuesInSource(parsed.text, loc.range, loc.value)) {
+    for (const { range, message } of celIssuesInSource(parsed.text, loc.range, loc.value, loc.style)) {
       const diagnostic = new vscode.Diagnostic(
         new vscode.Range(offsetToPosition(document, range[0]), offsetToPosition(document, range[1])),
         `CEL expression: ${message}`,

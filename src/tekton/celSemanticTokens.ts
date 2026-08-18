@@ -31,7 +31,7 @@ export class CelSemanticTokensProvider implements vscode.DocumentSemanticTokensP
     const tokens: { range: [number, number]; type: CelHighlightTokenType }[] = [];
     for (const parsed of parseTektonFile(document.getText())) {
       for (const loc of findCelExpressions(parsed)) {
-        tokens.push(...celHighlightTokensInSource(parsed.text, loc.range, loc.value));
+        tokens.push(...celHighlightTokensInSource(parsed.text, loc.range, loc.value, loc.style));
       }
     }
     // Ascending document-offset order == ascending position order, which SemanticTokensBuilder

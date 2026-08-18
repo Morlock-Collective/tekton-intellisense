@@ -4,6 +4,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- CEL validation/highlighting now work for `filter`/`expression` written as a block scalar (`|` or `>`), not just quoted/plain strings
+
 ## [0.7.0] - 2026-08-18
 
 ### Added
