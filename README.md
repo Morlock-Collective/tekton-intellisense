@@ -29,8 +29,8 @@ of future improvement.
 - **Schema-aware completion** — suggests valid keys wherever the cursor is (e.g. `script`/`image`
   inside a step), not just inside `$(...)`.
 - **CEL expression validation** — flags syntactically broken `cel` interceptor expressions
-  (`filter`, `overlays[].expression`) in Triggers resources, via a real parser against CEL's
-  grammar (not just bracket/quote balance).
+  (`filter`, `overlays[].expression`) in Triggers resources, via a basic parser against CEL's
+  grammar.
 - **CEL syntax highlighting** — strings, numbers, operators, properties, and function calls
   inside those same expressions get colored per the editor's theme.
 - **Missing-`runAfter` hint** — an informative hint if omitting runAfter when 
