@@ -7,6 +7,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 - Syntax validation for `cel` interceptor expressions (`filter`, `overlays[].expression`), via a hand-rolled parser against CEL's grammar
 - CEL validation also flags a ternary whose branches are literally-typed and disagree (`cond ? true : 234`)
+- CEL expression syntax highlighting (string/number/operator/property/function), via a semantic tokens provider
 
 ## [0.6.0] - 2026-08-17
 

@@ -17,6 +17,7 @@ import { addTaskCommand } from "./commands/addTask";
 import { addConditionalCommand } from "./commands/addConditional";
 import { addParameterCommand } from "./commands/addParameter";
 import { disposeEditTaskScript, editTaskScriptCommand, registerScriptWriteback } from "./commands/editTaskScript";
+import { CelSemanticTokensProvider, celSemanticTokensLegend } from "./tekton/celSemanticTokens";
 
 const YAML_LIKE = /\.(ya?ml)$/i;
 
@@ -223,6 +224,14 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.languages.registerRenameProvider({ pattern: "**/*.{yaml,yml}" }, new TektonRenameProvider(workspaceIndex))
+  );
+
+  context.subscriptions.push(
+    vscode.languages.registerDocumentSemanticTokensProvider(
+      { pattern: "**/*.{yaml,yml}" },
+      new CelSemanticTokensProvider(),
+      celSemanticTokensLegend
+    )
   );
 
   context.subscriptions.push(

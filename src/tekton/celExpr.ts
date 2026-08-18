@@ -456,14 +456,104 @@ export function celIssuesInSource(
   const issues = checkCelExpression(value);
   if (issues.length === 0) return [];
 
-  const [nodeStart, nodeEnd] = nodeRange;
-  const quoted = sourceText[nodeStart] === '"' || sourceText[nodeStart] === "'";
-  const contentStart = quoted ? nodeStart + 1 : nodeStart;
-  const preciseMappingValid = sourceText.slice(contentStart, contentStart + value.length) === value;
+  const mapping = mapValueIntoSource(sourceText, nodeRange, value);
 
   return issues.map((issue) =>
-    preciseMappingValid
-      ? { range: [contentStart + issue.start, contentStart + issue.end] as [number, number], message: issue.message }
-      : { range: [nodeStart, nodeEnd] as [number, number], message: issue.message }
+    mapping.precise
+      ? { range: [mapping.contentStart + issue.start, mapping.contentStart + issue.end] as [number, number], message: issue.message }
+      : { range: nodeRange, message: issue.message }
   );
+}
+
+/** Shared by {@link celIssuesInSource} and {@link celHighlightTokensInSource} -- see the doc comment above for what "precise" means and why it's verified rather than assumed. */
+function mapValueIntoSource(
+  sourceText: string,
+  nodeRange: [number, number],
+  value: string
+): { contentStart: number; precise: boolean } {
+  const [nodeStart] = nodeRange;
+  const quoted = sourceText[nodeStart] === '"' || sourceText[nodeStart] === "'";
+  const contentStart = quoted ? nodeStart + 1 : nodeStart;
+  return { contentStart, precise: sourceText.slice(contentStart, contentStart + value.length) === value };
+}
+
+export type CelHighlightTokenType = "string" | "number" | "keyword" | "operator" | "variable" | "function" | "property";
+
+export interface CelHighlightToken {
+  type: CelHighlightTokenType;
+  start: number;
+  end: number;
+}
+
+/** Punctuation tokens meaningful enough to highlight as operators; brackets/comma/dot are left alone, same as most language highlighters. */
+const OPERATOR_PUNCT_TEXT = new Set(["+", "-", "*", "/", "%", "!", "<", ">", "<=", ">=", "==", "!=", "&&", "||", "?", ":"]);
+
+/**
+ * Classifies `expr`'s tokens for syntax highlighting -- reuses the same
+ * lexer as {@link checkCelExpression}, since token *shape* (string, number,
+ * keyword, punctuation) is unambiguous regardless of whether the overall
+ * expression is syntactically valid; a lex error still highlights whatever
+ * tokens were found before it (useful mid-edit, when the expression is
+ * necessarily incomplete). An identifier is further classified from its
+ * neighbors: right before a "(" it's a `function` (a free function call or
+ * a method call, e.g. the `matches` in `body.matches(...)` -- checked
+ * before the "after a dot" rule below, so a method call reads as a
+ * function rather than a property), right after a "." (and not a call)
+ * it's a `property`, otherwise a plain `variable` -- and `in` (CEL's
+ * membership operator, lexically just an identifier) is treated as a
+ * `keyword`.
+ */
+export function tokenizeCelForHighlighting(expr: string): CelHighlightToken[] {
+  const { tokens } = lex(expr);
+  const out: CelHighlightToken[] = [];
+
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t.type === "string") {
+      out.push({ type: "string", start: t.start, end: t.end });
+    } else if (t.type === "number") {
+      out.push({ type: "number", start: t.start, end: t.end });
+    } else if (t.type === "keyword") {
+      out.push({ type: "keyword", start: t.start, end: t.end });
+    } else if (t.type === "punct") {
+      if (OPERATOR_PUNCT_TEXT.has(t.text)) out.push({ type: "operator", start: t.start, end: t.end });
+    } else {
+      const prev = tokens[i - 1];
+      const next = tokens[i + 1];
+      if (t.text === "in") {
+        out.push({ type: "keyword", start: t.start, end: t.end });
+      } else if (next && next.type === "punct" && next.text === "(") {
+        out.push({ type: "function", start: t.start, end: t.end });
+      } else if (prev && prev.type === "punct" && prev.text === ".") {
+        out.push({ type: "property", start: t.start, end: t.end });
+      } else {
+        out.push({ type: "variable", start: t.start, end: t.end });
+      }
+    }
+  }
+
+  return out;
+}
+
+/**
+ * Maps {@link tokenizeCelForHighlighting}'s expression-relative token
+ * offsets onto `sourceText`, the same way {@link celIssuesInSource} does
+ * for validation issues -- except here, when the mapping can't be verified
+ * precise (an escaped quote, a block scalar), highlighting is skipped
+ * entirely rather than falling back to the whole-scalar range: unlike a
+ * single diagnostic, several overlapping "highlight the whole value"
+ * tokens would just look broken.
+ */
+export function celHighlightTokensInSource(
+  sourceText: string,
+  nodeRange: [number, number],
+  value: string
+): { range: [number, number]; type: CelHighlightTokenType }[] {
+  const tokens = tokenizeCelForHighlighting(value);
+  if (tokens.length === 0) return [];
+
+  const mapping = mapValueIntoSource(sourceText, nodeRange, value);
+  if (!mapping.precise) return [];
+
+  return tokens.map((t) => ({ range: [mapping.contentStart + t.start, mapping.contentStart + t.end] as [number, number], type: t.type }));
 }

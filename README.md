@@ -31,6 +31,8 @@ of future improvement.
 - **CEL expression validation** — flags syntactically broken `cel` interceptor expressions
   (`filter`, `overlays[].expression`) in Triggers resources, via a real parser against CEL's
   grammar (not just bracket/quote balance).
+- **CEL syntax highlighting** — strings, numbers, operators, properties, and function calls
+  inside those same expressions get colored per the editor's theme.
 - **Missing-`runAfter` hint** — an informative hint if omitting runAfter when 
   referencing the result from an earlier task (if the user wants to make the order explicit).
 - **Tekton Triggers support** — `EventListener`/`Trigger`/`TriggerTemplate`/

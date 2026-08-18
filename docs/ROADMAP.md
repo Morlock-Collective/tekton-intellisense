@@ -309,6 +309,22 @@ value and verifying the match — falling back to the whole-scalar range
 only for the rare case (escaped quotes, block scalars) it can't map
 exactly, rather than ever guessing a wrong position.
 
+**CEL syntax highlighting** (`celSemanticTokens.ts`) — colors the same
+`filter`/`overlays[].expression` strings, via a
+`DocumentSemanticTokensProvider` rather than a TextMate grammar
+injection (the mechanism `syntaxes/tekton-refs.injection.json` uses for
+`$(...)` refs). A grammar couldn't scope itself safely here: the CEL
+expression sits under a bare `value:` key, one of the most generic,
+ubiquitous keys in Tekton YAML, so a regex-based grammar would end up
+highlighting unrelated strings. The semantic tokens provider instead
+rides on the exact same structural knowledge already built for
+validation (`findCelExpressions` + `celExpr.ts`'s real lexer), so
+there's no scoping ambiguity — every highlighted range is a genuine CEL
+expression location, nothing pattern-matched. Uses only VS Code's
+*standard* semantic token types (string/number/keyword/operator/
+variable/function/property), so themes color them with no extra
+`semanticTokenScopes` contribution needed.
+
 Two more checks ride on the parser without becoming real type-checking:
 `true`/`false`/`null` are lexed as their own literal token type rather
 than as identifiers, matching CEL's actual grammar — so `2.true` is

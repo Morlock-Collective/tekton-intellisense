@@ -12,7 +12,7 @@ spec:
         - name: overlays
           value:
             - key: broken_sha
-              expression: "1 >= 2 . true"
+              expression: "1 >= 2 ? qwe.whatever : something"
   bindings:
     - ref: github-binding
   template:

@@ -36,7 +36,7 @@ const {
   triggerRefIdentityEdits,
 } = require("../out/tekton/renameTarget");
 const { validateAgainstSchema } = require("../out/tekton/schemaValidation");
-const { checkCelExpression, celIssuesInSource } = require("../out/tekton/celExpr");
+const { checkCelExpression, celIssuesInSource, tokenizeCelForHighlighting, celHighlightTokensInSource } = require("../out/tekton/celExpr");
 const { findCelExpressions } = require("../out/tekton/model");
 const YAML = require("yaml");
 const SCHEMAS_DIR = path.join(__dirname, "..", "schemas");
@@ -2780,8 +2780,30 @@ console.log("\nCEL expression extraction + source mapping (model.ts findCelExpre
   if (!okValid) failures++;
 
   // filter is valid CEL; the overlay expression has a real bug -- "true" is a literal token, not
-  // an identifier, so it can't be a member name (the exact case a live user ran into).
-  const brokenParsed = parseTektonDocument(fs.readFileSync(path.join(__dirname, "trigger-cel-invalid.yaml"), "utf8"));
+  // an identifier, so it can't be a member name (the exact case a live user ran into). Inline
+  // rather than reading test-fixtures/trigger-cel-invalid.yaml, since that file doubles as a
+  // scratch pad for manual testing and its content shifts underneath automated assertions.
+  const brokenYaml = `apiVersion: triggers.tekton.dev/v1beta1
+kind: Trigger
+metadata:
+  name: broken-cel-trigger
+spec:
+  interceptors:
+    - ref:
+        name: cel
+      params:
+        - name: filter
+          value: "body.matches('push')"
+        - name: overlays
+          value:
+            - key: broken_sha
+              expression: "1 >= 2 . true"
+  bindings:
+    - ref: github-binding
+  template:
+    ref: build-template
+`;
+  const brokenParsed = parseTektonDocument(brokenYaml);
   const brokenLocs = findCelExpressions(brokenParsed);
   const brokenIssues = brokenLocs.flatMap((loc) => celIssuesInSource(brokenParsed.text, loc.range, loc.value));
   const okBroken =
@@ -2794,8 +2816,48 @@ console.log("\nCEL expression extraction + source mapping (model.ts findCelExpre
   const overlayLoc = brokenLocs[1];
   const precise =
     overlayLoc && brokenIssues[0] && brokenIssues[0].range[0] >= overlayLoc.range[0] && brokenIssues[0].range[1] <= overlayLoc.range[1];
-  console.log(`  [${okBroken && precise ? "PASS" : "FAIL"}] trigger-cel-invalid.yaml: 2 expressions, 1 issue (trailing operator), precisely positioned (${JSON.stringify(brokenIssues)})`);
+  console.log(`  [${okBroken && precise ? "PASS" : "FAIL"}] broken cel interceptor: 2 expressions, 1 issue (bad member name), precisely positioned (${JSON.stringify(brokenIssues)})`);
   if (!okBroken || !precise) failures++;
+}
+
+console.log("\nCEL highlighting classification (celExpr.ts tokenizeCelForHighlighting):");
+{
+  const tokenTypesFor = (expr) => tokenizeCelForHighlighting(expr).map((t) => t.type);
+  const cases = [
+    ["body.matches('push')", ["variable", "function", "string"]], // body=variable, matches=function (before "("), 'push'=string; "." isn't tokenized
+    ["1 + 2.5", ["number", "operator", "number"]],
+    ["body.draft == true", ["variable", "property", "operator", "keyword"]],
+    ["body.repository.owner in ['tektoncd']", ["variable", "property", "property", "keyword", "string"]],
+    ["!body.draft", ["operator", "variable", "property"]],
+  ];
+  let ok = true;
+  for (const [expr, expectedTypes] of cases) {
+    const got = tokenTypesFor(expr);
+    if (JSON.stringify(got) !== JSON.stringify(expectedTypes)) {
+      ok = false;
+      console.log(`  ${JSON.stringify(expr)}: expected ${JSON.stringify(expectedTypes)}, got ${JSON.stringify(got)}`);
+    }
+  }
+  console.log(`  [${ok ? "PASS" : "FAIL"}] identifiers classified as variable/property/function by position, keywords/operators recognized`);
+  if (!ok) failures++;
+}
+
+console.log("\nCEL highlighting source mapping (celExpr.ts celHighlightTokensInSource):");
+{
+  const parsed = parseTektonDocument(fs.readFileSync(path.join(__dirname, "trigger.yaml"), "utf8"));
+  const loc = findCelExpressions(parsed)[0]; // header.match('X-GitHub-Event', 'push')
+  const tokens = celHighlightTokensInSource(parsed.text, loc.range, loc.value);
+  const everyTokenWithinScalar = tokens.every(({ range }) => range[0] >= loc.range[0] && range[1] <= loc.range[1]);
+  const everyTokenTextMatches = tokens.every(({ range, type }) => {
+    const text = parsed.text.slice(range[0], range[1]);
+    // spot-check a couple of concrete token texts land where expected
+    if (type === "string") return text === "'X-GitHub-Event'" || text === "'push'";
+    if (type === "function") return text === "match";
+    return true;
+  });
+  const ok = tokens.length > 0 && everyTokenWithinScalar && everyTokenTextMatches;
+  console.log(`  [${ok ? "PASS" : "FAIL"}] trigger.yaml filter expression: ${tokens.length} tokens, all within the scalar's own range (${JSON.stringify(tokens.map((t) => ({ type: t.type, text: parsed.text.slice(...t.range) })))})`);
+  if (!ok) failures++;
 }
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) FAILED.`);
