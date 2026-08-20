@@ -9,7 +9,14 @@ import * as vscode from "vscode";
 import * as os from "os";
 import * as path from "path";
 import { parseTektonFile } from "../tekton/model";
-import { EmbeddedScriptBlock, findEmbeddedScriptBlocks, LANGUAGE_EXTENSIONS, reindentScriptContent } from "../tekton/scriptEmbed";
+import {
+  EmbeddedScriptBlock,
+  findEmbeddedScriptBlocks,
+  LANGUAGE_EXTENSIONS,
+  refreshTemplateGapMarkers,
+  reindentScriptContent,
+  restoreTemplateGaps,
+} from "../tekton/scriptEmbed";
 
 /**
  * Scratch files live under the OS temp directory — confirmed (on Linux;
@@ -159,7 +166,15 @@ async function writeBackToHost(savedDocument: vscode.TextDocument, registration:
     return;
   }
 
-  const indented = reindentScriptContent(savedDocument.getText(), block.indent);
+  const savedContent = savedDocument.getText();
+
+  // A block with no embedded Helm templates (the overwhelmingly common case) just gets a plain
+  // reindent; one with templateGaps needs restoreTemplateGaps instead, to put each one's original
+  // text back in place of its marker comment rather than ever writing that comment into the host.
+  const indented =
+    block.templateGaps.length > 0
+      ? restoreTemplateGaps(savedContent, block.indent, block.templateGaps)
+      : reindentScriptContent(savedContent, block.indent);
   const edit = new vscode.WorkspaceEdit();
   edit.replace(
     registration.hostUri,
@@ -174,6 +189,19 @@ async function writeBackToHost(savedDocument: vscode.TextDocument, registration:
   hostEditor.revealRange(new vscode.Range(jumpTo, jumpTo), vscode.TextEditorRevealType.InCenterIfOutsideViewport);
 
   await closeTabsFor(savedDocument.uri);
+
+  // A marker's visible text is purely for context -- editing it has zero effect on the host
+  // (only the invisible id does), so left alone a stale edit would just sit in the scratch file
+  // indefinitely, looking like it did something. Snap every marker back to its true rendering
+  // now that the tab's closed, writing straight to disk (not a WorkspaceEdit against the
+  // just-saved, about-to-be-discarded buffer) so the correction is what's actually there next
+  // time this block is opened.
+  if (block.templateGaps.length > 0) {
+    const refreshed = refreshTemplateGapMarkers(savedContent, block.languageId, block.templateGaps);
+    if (refreshed !== savedContent) {
+      await vscode.workspace.fs.writeFile(savedDocument.uri, Buffer.from(refreshed, "utf8"));
+    }
+  }
 }
 
 /** Registers the save listener that writes a scratch file's edits back to its host document. Call once during activation. */

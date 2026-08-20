@@ -186,6 +186,69 @@ was never what was broken. The `os.tmpdir()` scratch location took three
 attempts to settle on (see Notable bugs below) and is now confirmed
 working on both Linux and Windows.
 
+**Embedded Helm templates inside a script block** — a standalone Helm
+control-flow line (`{{- if }}`, `{{- end }}`, ...) written *inside* a
+`script: |` block, at less indentation than the rest of the script (a
+common authoring style), broke the block scalar exactly like it would
+break any other YAML structure: everything past that line silently fell
+out of the block, and the underlying document actually failed to parse
+(`YAMLParseError`s recovered from best-effort, producing genuine
+corruption — a bogus sibling key like `"echo more": null` on the step
+map). helmMask.ts now re-indents such a line to the *lesser* of its
+immediate before/after neighbors' own indentation, instead of always
+preserving its original column — not a required exact match between the
+two (a control line sitting between a nested `if`'s body and the
+script's own base indentation legitimately has two differently-indented
+real neighbors; since both are assumed to already be part of the same
+enclosing block, the smaller of the two is still safely at or beyond
+that block's true indentation). Masking can only ever *redistribute* the
+characters already on that line (adding or removing any would shift
+every offset after it), so this safely declines whenever there isn't
+room, falling back to the old behavior rather than guessing.
+`MaskedAction` exposes exactly what got masked and where, so a caller
+like `scriptEmbed.ts` can find one that landed inside its own block
+scalar.
+
+With the block now parsing as one continuous whole, `scriptEmbed.ts`
+shows each embedded template as a single-line comment in whatever syntax
+the script's own language uses (`#`, `//`, or `--`) — with the *actual*
+template text visible right there for context, not a generic
+placeholder, since that's far more useful to read while editing. What
+write-back actually keys off, though, is an invisible id encoded right
+before that visible text (fixed-width binary, one of two zero-width
+characters per bit, bounded by two more invisible marker characters —
+built via `String.fromCharCode` in the source rather than written as
+literal characters, which would be unreviewable by eye and at risk of
+an editor/formatter normalizing or stripping them on save). That
+indirection is what lets a marker line be edited or annotated by the
+user — even the visible template text itself — without corrupting what
+actually gets restored: `restoreTemplateGaps` only ever writes back the
+gap's real, stored `original`, found by decoding whichever line still
+carries that invisible id, never whatever visible text surrounds it.
+Matching by counting marker occurrences instead of by id was an earlier
+version's bug, caught by testing a deliberate mid-block deletion:
+removing an earlier marker silently shifted every later one onto the
+wrong template. A marker line deleted entirely still simply isn't
+restored, matching ordinary editing semantics.
+
+Since editing a marker's visible text has no effect on the host (only
+the invisible id does), the save handler also applies
+`refreshTemplateGapMarkers` to the scratch file itself right after
+write-back, snapping every marker back to its true rendering — writing
+straight to disk rather than through a `WorkspaceEdit` against the
+just-saved, about-to-be-closed buffer, so the correction is what's
+actually there next time the block is reopened. Without this, a stale
+edit to a marker (it has no effect either way, so nothing signals it's
+wrong) would just sit in the scratch file indefinitely across sessions,
+looking like it meant something.
+
+Each `MaskedAction.original` captures its line's own original
+indentation (not just the bare `{{ ... }}` text), and write-back
+splices it back in completely unmodified — restoring a gap is a no-op
+on that text, never a second, unrequested edit of its own (an earlier
+version normalized it to the script's own indentation instead, which
+looked plausible but rewrote a line the user never touched).
+
 **TriggerTemplate param-wiring check** (`diagnostics.ts`) — flags an
 EventListener trigger entry (or standalone Trigger) whose bound
 TriggerTemplate declares a required param (no `default`) that none of its

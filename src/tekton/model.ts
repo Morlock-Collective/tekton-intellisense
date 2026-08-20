@@ -1,5 +1,5 @@
 import { Document, LineCounter, parseAllDocuments, Scalar, YAMLMap, YAMLSeq, isMap, isSeq, isScalar } from "yaml";
-import { maskHelmTemplates } from "./helmMask";
+import { maskHelmTemplates, MaskedAction } from "./helmMask";
 
 export type TektonKind =
   | "Pipeline"
@@ -147,6 +147,8 @@ export interface ParsedTektonDoc {
   range: [number, number];
   symbols: TektonSymbols;
   isHelmTemplated: boolean;
+  /** every masked `{{ ... }}` action across the whole file (shared across every resource in it, same as {@link text}) -- `scriptEmbed.ts` uses this to recognize a masked action that landed inside a script block, so it can show something meaningful in place of the masked filler and restore the original template text on write-back. */
+  maskedActions: MaskedAction[];
 }
 
 const TEKTON_API_PREFIX = "tekton.dev/";
@@ -530,7 +532,7 @@ function extractSymbols(doc: Document.Parsed): TektonSymbols | undefined {
  * given offset belongs to (see {@link findResourceAt}).
  */
 export function parseTektonFile(source: string): ParsedTektonDoc[] {
-  const { text, masked: isHelmTemplated } = maskHelmTemplates(source);
+  const { text, masked: isHelmTemplated, actions: maskedActions } = maskHelmTemplates(source);
 
   const lineCounter = new LineCounter();
   let docs: Document.Parsed[];
@@ -545,7 +547,7 @@ export function parseTektonFile(source: string): ParsedTektonDoc[] {
     const symbols = extractSymbols(doc);
     if (!symbols) continue;
     const range: [number, number] = doc.range ? [doc.range[0], doc.range[2]] : [0, text.length];
-    out.push({ doc, lineCounter, text, range, isHelmTemplated, symbols });
+    out.push({ doc, lineCounter, text, range, isHelmTemplated, symbols, maskedActions });
   }
   return out;
 }

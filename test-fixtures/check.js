@@ -22,7 +22,13 @@ const { closestMatch } = require("../out/tekton/levenshtein");
 const { findDuplicateGroups } = require("../out/tekton/duplicates");
 const { findMissingRunAfter } = require("../out/tekton/runAfterCheck");
 const { blockAfterText, quoteYamlString } = require("../out/commands/snippetText");
-const { findEmbeddedScriptBlocks, detectShebangLanguage, reindentScriptContent } = require("../out/tekton/scriptEmbed");
+const {
+  findEmbeddedScriptBlocks,
+  detectShebangLanguage,
+  reindentScriptContent,
+  restoreTemplateGaps,
+  refreshTemplateGapMarkers,
+} = require("../out/tekton/scriptEmbed");
 const {
   resolveRenameTarget,
   sameDocumentEdits,
@@ -2417,6 +2423,130 @@ console.log("\nEmbedded script block detection (scriptEmbed.ts):");
   const okReindentEdited = reindentScriptContent("echo hi\n\necho bye", 4) === "    echo hi\n\n    echo bye\n";
   console.log(`  [${okReindentEdited ? "PASS" : "FAIL"}] reindentScriptContent leaves blank lines blank (no trailing whitespace) and always ends with one newline`);
   if (!okReindentEdited) failures++;
+}
+
+console.log("\nEmbedded script block with mid-block Helm templates (helmMask.ts reindent + scriptEmbed.ts templateGaps):");
+{
+  const source = fs.readFileSync(path.join(__dirname, "helm-script-embedded-template.yaml"), "utf8");
+  const parsed = parseTektonDocument(source);
+  const okHelmTemplated = parsed.isHelmTemplated;
+  const blocks = findEmbeddedScriptBlocks(parsed);
+  const okOneBlock = blocks.length === 1;
+  console.log(`  [${okHelmTemplated && okOneBlock ? "PASS" : "FAIL"}] recognized as Helm-templated, 1 script block found (not cut off at the first template line)`);
+  if (!okHelmTemplated || !okOneBlock) failures++;
+
+  const block = blocks[0];
+  const okFullContent =
+    block &&
+    block.rawContent.includes('thisis = "someline"') &&
+    block.rawContent.includes('coolio = "Qqweeewq"') &&
+    block.rawContent.includes("def somefunction():") &&
+    block.rawContent.includes('print("debug")') &&
+    block.rawContent.includes("# This is a fine comment");
+  console.log(`  [${okFullContent ? "PASS" : "FAIL"}] script content spans past every template line, all the way to the end of the block`);
+  if (!okFullContent) {
+    console.log({ rawContent: block && block.rawContent });
+    failures++;
+  }
+
+  const okGapCount = block && block.templateGaps.length === 3;
+  const okGapText =
+    block &&
+    block.templateGaps.map((g) => g.original).join("|") ===
+      ["{{ some kind of helm template }}", "{{- if .Values.debug }}", "{{- end }}"].join("|");
+  console.log(
+    `  [${okGapCount && okGapText ? "PASS" : "FAIL"}] 3 template gaps found, in document order, original text captured verbatim (${JSON.stringify(block && block.templateGaps.map((g) => g.original))})`
+  );
+  if (!okGapCount || !okGapText) failures++;
+
+  // Each gap's marker shows the *real* template text (for context), not a generic placeholder --
+  // the id that write-back actually keys off is invisible, so it doesn't show up in a plain
+  // substring check for the visible content.
+  const okNoRawFiller = block && !block.content.includes("xxxx") && !block.rawContent.includes("xxxx");
+  const okVisibleText =
+    block &&
+    block.content.includes("{{ some kind of helm template }}") &&
+    block.content.includes("{{- if .Values.debug }}") &&
+    block.content.includes("{{- end }}");
+  // The invisible id sits between "# " and the visible "{{" text, so this can't be a simple
+  // anchored regex -- just check the line starts with a Python comment and contains the template.
+  const okMarkerIsPythonComment =
+    block &&
+    block.content.split("\n").filter((l) => l.startsWith("#") && l.includes("{{")).length === 3;
+  console.log(
+    `  [${okNoRawFiller && okVisibleText && okMarkerIsPythonComment ? "PASS" : "FAIL"}] each gap shown as a "#"-commented marker with the real template text visible (Python's line-comment syntax), not raw "xxxx" filler`
+  );
+  if (!okNoRawFiller || !okVisibleText || !okMarkerIsPythonComment) {
+    console.log({ content: block && block.content });
+    failures++;
+  }
+
+  // Round-trip: saving the scratch content completely unedited must reconstruct the exact
+  // original host block, byte-for-byte -- each template's own original indentation (column 0 in
+  // this fixture, deliberately different from the script's) is untouched, not normalized to the
+  // block's indent. Restoring a gap is supposed to be a no-op on that text.
+  const restoredUnedited = restoreTemplateGaps(block.content, block.indent, block.templateGaps);
+  const originalHostBlock = source.slice(block.hostRange[0], block.hostRange[1]);
+  const okRoundTrip = restoredUnedited === originalHostBlock;
+  console.log(`  [${okRoundTrip ? "PASS" : "FAIL"}] unedited scratch content round-trips back to the exact original host block, template indentation untouched`);
+  if (!okRoundTrip) {
+    console.log({ restoredUnedited, originalHostBlock });
+    failures++;
+  }
+
+  // Editing real script content, AND the visible template text shown on a marker line, still
+  // restores every gap to its true original -- only the invisible id has to survive, so a user
+  // annotating or lightly editing what they see doesn't corrupt what actually gets written back.
+  const edited = block.content
+    .replace('coolio = "Qqweeewq"', 'coolio = "EDITED"')
+    .replace("{{ some kind of helm template }}", "{{ some kind of helm template }} (looks like a conditional?)");
+  const restoredEdited = restoreTemplateGaps(edited, block.indent, block.templateGaps);
+  const okEditedRestore =
+    restoredEdited.includes('coolio = "EDITED"') &&
+    restoredEdited.includes("{{ some kind of helm template }}") &&
+    !restoredEdited.includes("(looks like a conditional?)") &&
+    restoredEdited.includes("{{- if .Values.debug }}") &&
+    restoredEdited.includes("{{- end }}");
+  console.log(`  [${okEditedRestore ? "PASS" : "FAIL"}] editing real content, or even a marker's own visible text, still restores every gap's true original`);
+  if (!okEditedRestore) {
+    console.log({ restoredEdited });
+    failures++;
+  }
+
+  // Deleting one marker line entirely (as if the user removed that section) drops only that one
+  // gap's template -- the other two still restore normally.
+  const lines = block.content.split("\n");
+  const firstMarkerIdx = lines.findIndex((l) => l.startsWith("#") && l.includes("{{"));
+  const withOneMarkerRemoved = [...lines.slice(0, firstMarkerIdx), ...lines.slice(firstMarkerIdx + 1)].join("\n");
+  const restoredPartial = restoreTemplateGaps(withOneMarkerRemoved, block.indent, block.templateGaps);
+  const okPartialRestore =
+    !restoredPartial.includes("{{ some kind of helm template }}") &&
+    restoredPartial.includes("{{- if .Values.debug }}") &&
+    restoredPartial.includes("{{- end }}");
+  console.log(`  [${okPartialRestore ? "PASS" : "FAIL"}] deleting one marker's whole line drops only that gap's template, the rest still restore`);
+  if (!okPartialRestore) {
+    console.log({ restoredPartial });
+    failures++;
+  }
+
+  // refreshTemplateGapMarkers is what the "Edit Task Script" save handler applies to the scratch
+  // file itself right after write-back, so an edit to a marker's visible text (which never
+  // affects the host document) doesn't sit around indefinitely looking like it did something.
+  const editedMarkerContent = block.content.replace(
+    "{{ some kind of helm template }}",
+    "{{ some kind of helm template }} <- I added a note here"
+  );
+  const refreshed = refreshTemplateGapMarkers(editedMarkerContent, block.languageId, block.templateGaps);
+  const okRefreshedClean = refreshed.includes("{{ some kind of helm template }}") && !refreshed.includes("I added a note here");
+  const okRefreshedStillRestores = restoreTemplateGaps(refreshed, block.indent, block.templateGaps) === originalHostBlock;
+  const okRefreshedOtherLinesUntouched = refreshed.split("\n").length === editedMarkerContent.split("\n").length;
+  console.log(
+    `  [${okRefreshedClean && okRefreshedStillRestores && okRefreshedOtherLinesUntouched ? "PASS" : "FAIL"}] refreshTemplateGapMarkers snaps an edited marker's visible text back to the truth, without touching line count or other lines`
+  );
+  if (!okRefreshedClean || !okRefreshedStillRestores || !okRefreshedOtherLinesUntouched) {
+    console.log({ refreshed });
+    failures++;
+  }
 }
 
 console.log("\nPipeline task entry's inline taskSpec: steps/sidecars recognized (not just standalone Task/TaskRun):");

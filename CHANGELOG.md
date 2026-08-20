@@ -6,6 +6,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 - CEL validation/highlighting now work for `filter`/`expression` written as a block scalar (`|` or `>`), not just quoted/plain strings
+- Edit Task Script no longer cuts a script off at an embedded Helm template line (`{{- if }}`/`{{- end }}`/...); the template shows as a same-language comment (with the real template text visible for context) in the scratch file and restores exactly, unchanged, on save
 
 ## [0.7.0] - 2026-08-18
 

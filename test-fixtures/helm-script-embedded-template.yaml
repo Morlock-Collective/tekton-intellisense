@@ -1,0 +1,20 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: whatever
+spec:
+  steps:
+    - name: whatever
+      script: |
+        #!/usr/bin/env python
+        thisis = "someline"
+{{ some kind of helm template }}
+        coolio = "Qqweeewq"
+        def somefunction():
+            pass
+{{- if .Values.debug }}
+        print("debug")
+{{- end }}
+        # This is a fine comment
+
+
