@@ -45,6 +45,12 @@ of future improvement.
   `$(body...)`/`$(header...)`/`$(extensions...)` in a TriggerBinding's
   `value:` are recognized and highlighted but never validated — there's no
   declared schema for the incoming webhook payload to check them against.
+- **Cluster-shared resources** — a Task/Pipeline/etc. referenced by name but
+  defined only on the cluster (a shared catalog namespace, the common
+  Kubernetes/OpenShift pattern) resolves via `kubectl`/`oc` for completion,
+  hover, and Go to Definition, once configured under
+  `tektonIntellisense.clusterResources` (or via `Tekton: Configure Cluster
+  Resources`). Read-only — no rename, no edit.
 - **Context-aware completion** — typing `$(params.` (or `workspaces.`,
   `results.`, `tasks.`, `context.`) suggests what's valid there:
   declared names for the current document, filtered by resource kind, narrowing to leaf

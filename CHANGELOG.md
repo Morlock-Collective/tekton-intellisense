@@ -4,6 +4,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- Cluster-shared resources: reference a Task/Pipeline/etc. defined only on the cluster (`tektonIntellisense.clusterResources.*` settings, `Tekton: Configure/Refresh Cluster Resources`, `Tekton: Authenticate to Cluster`) — resolves for completion/hover/Go to Definition, read-only
+
 ## [0.8.0] - 2026-08-20
 
 ### Fixed
