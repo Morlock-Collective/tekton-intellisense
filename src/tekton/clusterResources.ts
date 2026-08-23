@@ -55,9 +55,36 @@ export interface ClusterSource {
 }
 
 export interface ClusterResourceConfig {
-  /** `kubectl`, `oc`, or a full path to either -- never shell-interpreted, just the argv[0] passed to `execFile`. */
+  /**
+   * `kubectl`, `oc`, a full path to either, or a wrapper-plus-subcommand
+   * line like `microk8s kubectl` -- never shell-interpreted (see
+   * {@link splitCommandLine}), so no other shell syntax (variable
+   * expansion, single-quote escaping, `&&`, ...) is understood, only
+   * whitespace-separated tokens with optional double-quoting for a token
+   * that itself contains spaces (e.g. a Windows install path).
+   */
   command: string;
   sources: ClusterSource[];
+}
+
+/**
+ * Splits a configured command line into its executable and any fixed
+ * leading arguments -- e.g. `"microk8s kubectl"` -> `["microk8s",
+ * "kubectl"]`, so every invocation becomes `microk8s kubectl get ...`
+ * rather than trying (and failing) to spawn a single file literally named
+ * "microk8s kubectl". A double-quoted span counts as one token, so a path
+ * containing spaces (`"C:\Program Files\bin\kubectl.exe"`) still works.
+ * Nothing else is shell syntax here — this never goes through a shell, on
+ * purpose, so there's no shell to interpret it anyway.
+ */
+export function splitCommandLine(command: string): string[] {
+  const tokens: string[] = [];
+  const re = /"([^"]*)"|(\S+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(command))) {
+    tokens.push(m[1] !== undefined ? m[1] : m[2]);
+  }
+  return tokens;
 }
 
 export interface FetchedResource {
@@ -109,6 +136,13 @@ export const defaultRunner: CommandRunner = (command, args, timeoutMs) =>
     });
   });
 
+/** Splits `commandLine` and invokes `runner` with the real executable plus its fixed leading args, then whatever `args` this particular call needs on top. */
+function runCommandLine(runner: CommandRunner, commandLine: string, args: string[], timeoutMs: number): Promise<string> {
+  const [executable, ...prefixArgs] = splitCommandLine(commandLine);
+  if (!executable) return Promise.reject(new Error("no cluster resource command configured"));
+  return runner(executable, [...prefixArgs, ...args], timeoutMs);
+}
+
 /**
  * Runs `<command> version --client` purely to check whether `command` can
  * be spawned at all, before attempting any real (namespace, kind) fetch —
@@ -117,19 +151,20 @@ export const defaultRunner: CommandRunner = (command, args, timeoutMs) =>
  * recognize `--client`; that's not this check's business, the real
  * per-source fetches will surface their own more specific errors).
  */
-async function commandUnavailableMessage(runner: CommandRunner, command: string, timeoutMs: number): Promise<string | undefined> {
+async function commandUnavailableMessage(runner: CommandRunner, commandLine: string, timeoutMs: number): Promise<string | undefined> {
   try {
-    await runner(command, ["version", "--client"], timeoutMs);
+    await runCommandLine(runner, commandLine, ["version", "--client"], timeoutMs);
     return undefined;
   } catch (err) {
     const code = err instanceof Error ? (err as NodeJS.ErrnoException).code : undefined;
     if (code !== "ENOENT") return undefined;
+    const [executable] = splitCommandLine(commandLine);
     return (
-      `"${command}" isn't a runnable command (not found on PATH). ` +
+      `"${executable}" isn't a runnable command (not found on PATH). ` +
       `If it works when you type it in a terminal, it's likely a shell alias or function — ` +
       `those only exist inside an interactive shell, not for a program spawning it directly. ` +
       `Set tektonIntellisense.clusterResources.command to the real executable's path instead ` +
-      `(try "which ${command}" or "type ${command}" in your terminal to find it).`
+      `(try "which ${executable}" or "type ${executable}" in your terminal to find it).`
     );
   }
 }
@@ -153,7 +188,7 @@ function stripServerFields(resource: Record<string, unknown>): Record<string, un
 
 async function fetchOne(
   runner: CommandRunner,
-  command: string,
+  commandLine: string,
   namespace: string,
   kind: ClusterResourceKind,
   timeoutMs: number
@@ -162,7 +197,7 @@ async function fetchOne(
   const args = ["get", info.qualifiedPlural, "-o", "json"];
   if (!info.clusterScoped) args.push("-n", namespace);
 
-  const stdout = await runner(command, args, timeoutMs);
+  const stdout = await runCommandLine(runner, commandLine, args, timeoutMs);
   const parsed: unknown = JSON.parse(stdout);
   const items: unknown[] = Array.isArray((parsed as { items?: unknown[] })?.items)
     ? (parsed as { items: unknown[] }).items

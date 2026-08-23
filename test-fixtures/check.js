@@ -43,7 +43,7 @@ const {
 } = require("../out/tekton/renameTarget");
 const { validateAgainstSchema } = require("../out/tekton/schemaValidation");
 const { checkCelExpression, celIssuesInSource, tokenizeCelForHighlighting, celHighlightTokensInSource } = require("../out/tekton/celExpr");
-const { fetchClusterResources, isClusterResourceKind } = require("../out/tekton/clusterResources");
+const { fetchClusterResources, isClusterResourceKind, splitCommandLine } = require("../out/tekton/clusterResources");
 const { findCelExpressions } = require("../out/tekton/model");
 const YAML = require("yaml");
 const SCHEMAS_DIR = path.join(__dirname, "..", "schemas");
@@ -3345,6 +3345,52 @@ async function runAsyncChecks() {
     console.log(`  [${okNoCommandError && okStillFetched ? "PASS" : "FAIL"}] a non-ENOENT failure on the pre-flight check doesn't block the real fetch`);
     if (!okNoCommandError || !okStillFetched) {
       console.log({ result });
+      failures++;
+    }
+  }
+
+  {
+    const okSimple = JSON.stringify(splitCommandLine("kubectl")) === JSON.stringify(["kubectl"]);
+    const okWrapper = JSON.stringify(splitCommandLine("microk8s kubectl")) === JSON.stringify(["microk8s", "kubectl"]);
+    const okQuotedPath =
+      JSON.stringify(splitCommandLine('"C:\\Program Files\\bin\\kubectl.exe" --context foo')) ===
+      JSON.stringify(["C:\\Program Files\\bin\\kubectl.exe", "--context", "foo"]);
+    console.log(
+      `  [${okSimple && okWrapper && okQuotedPath ? "PASS" : "FAIL"}] splitCommandLine: plain command, wrapper+subcommand, and a quoted path-with-spaces all tokenize correctly`
+    );
+    if (!okSimple || !okWrapper || !okQuotedPath) {
+      console.log({ simple: splitCommandLine("kubectl"), wrapper: splitCommandLine("microk8s kubectl"), quoted: splitCommandLine('"C:\\Program Files\\bin\\kubectl.exe" --context foo') });
+      failures++;
+    }
+  }
+
+  {
+    // "microk8s kubectl" -- a wrapper binary plus a fixed subcommand -- should invoke the real
+    // executable ("microk8s") with "kubectl" prepended to every call's own args, not try (and
+    // fail) to spawn a single file literally named "microk8s kubectl".
+    const calls = [];
+    const runner = async (executable, args) => {
+      calls.push({ executable, args });
+      if (args.includes("tasks.tekton.dev")) {
+        return JSON.stringify({
+          items: [{ apiVersion: "tekton.dev/v1", kind: "Task", metadata: { name: "shared-build", namespace: "shared-tasks" }, spec: {} }],
+        });
+      }
+      return JSON.stringify({ items: [] });
+    };
+    const config = { command: "microk8s kubectl", sources: [{ namespace: "shared-tasks", kinds: ["Task"] }] };
+    const result = await fetchClusterResources(config, { runner });
+
+    const okExecutable = calls.every((c) => c.executable === "microk8s");
+    const okPrefixed = calls.every((c) => c.args[0] === "kubectl");
+    const getCall = calls.find((c) => c.args.includes("get"));
+    const okGetArgs = getCall && getCall.args.join(" ") === "kubectl get tasks.tekton.dev -o json -n shared-tasks";
+    const okFetched = result.resources.length === 1 && result.resources[0].name === "shared-build";
+    console.log(
+      `  [${okExecutable && okPrefixed && okGetArgs && okFetched ? "PASS" : "FAIL"}] command "microk8s kubectl": every call spawns "microk8s" with "kubectl" prepended (${JSON.stringify(calls)})`
+    );
+    if (!okExecutable || !okPrefixed || !okGetArgs || !okFetched) {
+      console.log({ calls, result });
       failures++;
     }
   }

@@ -137,7 +137,7 @@
         "tektonIntellisense.clusterResources.command": {
           "type": "string",
           "default": "kubectl",
-          "description": "Path or command name for the client used to fetch shared cluster resources -- kubectl, oc, or a full path to either."
+          "description": "Path or command name for the client used to fetch shared cluster resources -- kubectl, oc, a full path to either, or a wrapper plus subcommand like \"microk8s kubectl\". Never a shell alias/function -- those aren't visible outside an interactive shell; use the real command instead."
         },
         "tektonIntellisense.clusterResources.authCommand": {
           "type": "string",

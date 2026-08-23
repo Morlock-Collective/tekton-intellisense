@@ -471,6 +471,17 @@ a chance to run) it short-circuits to one message suggesting the
 alias/function possibility directly, rather than the same unexplained
 ENOENT repeated per source.
 
+`command` also accepts a wrapper-plus-subcommand line, not just a bare
+executable — `microk8s kubectl` being the concrete case that came up,
+but the same shape covers similar tools generally.
+`splitCommandLine` tokenizes it (double-quoting a token that itself
+contains spaces, e.g. a Windows install path — no other shell syntax,
+since this deliberately never goes through a real shell) into an
+executable plus fixed leading arguments, prepended to every actual
+invocation. Both the pre-flight check and the real per-source fetches
+go through the same `runCommandLine` helper, so this isn't a special
+case either had to handle separately.
+
 A fetched resource has no real workspace file, but Go to Definition still
 needs somewhere to jump to — each gets a synthetic, read-only
 `tekton-cluster:` document (its own `TextDocumentContentProvider`), built
