@@ -1759,6 +1759,135 @@ spec:
   if (!okRun) failures++;
 }
 
+// Mirrors checkNameFormats in diagnostics.ts (same vscode-free constraint as the other
+// diagnostics-mirroring blocks above). Verified against tektoncd/pipeline's own Go validation
+// source (not just its docs): param names use stringAndArrayVariableNameFormat/
+// objectVariableNameFormat (task_validation.go), result names use ResultNameFormat
+// (result_types.go), and pipeline task/finally entry names use PipelineTask.ValidateName's
+// k8s DNS-1123-label check (pipeline_validation.go). Schema validation never catches these --
+// the CRD's OpenAPI schema declares no `pattern` for name fields, so a name like "lint command"
+// (a space) parses clean and is only rejected by Tekton's admission webhook at apply time.
+console.log("\nName format validation (param/result/task-entry/step names):");
+{
+  const PARAM_STRING_ARRAY_NAME = /^[_a-zA-Z][_a-zA-Z0-9.-]*$/;
+  const PARAM_OBJECT_NAME = /^[_a-zA-Z][_a-zA-Z0-9-]*$/;
+  const RESULT_NAME = /^([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9]$/;
+  const DNS1123_LABEL_NAME = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/;
+
+  function nameFormatIssues(parsed) {
+    const issues = [];
+    for (const p of parsed.symbols.params) {
+      const isObject = p.type === "object";
+      if (!(isObject ? PARAM_OBJECT_NAME : PARAM_STRING_ARRAY_NAME).test(p.name)) issues.push({ label: "param", name: p.name });
+    }
+    for (const r of parsed.symbols.results) {
+      if (!RESULT_NAME.test(r.name)) issues.push({ label: "result", name: r.name });
+    }
+    for (const t of parsed.symbols.tasks) {
+      if (!DNS1123_LABEL_NAME.test(t.name)) issues.push({ label: "task entry", name: t.name });
+    }
+    for (const stepMap of stepAndSidecarEntryMaps(parsed)) {
+      const nameNode = stepMap.get("name", true);
+      if (nameNode && typeof nameNode.value === "string" && !DNS1123_LABEL_NAME.test(nameNode.value)) {
+        issues.push({ label: "step", name: nameNode.value });
+      }
+    }
+    return issues;
+  }
+
+  const cleanTask = parseTektonDocument(`apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: run-tests
+spec:
+  params:
+    - name: test-command
+      type: string
+    - name: test_args.extra
+      type: array
+  results:
+    - name: tests-passed
+  steps:
+    - name: test
+      image: alpine
+`);
+  const okClean = nameFormatIssues(cleanTask).length === 0;
+  console.log(`  [${okClean ? "PASS" : "FAIL"}] valid param/result/step names: no issues`);
+  if (!okClean) {
+    console.log(nameFormatIssues(cleanTask));
+    failures++;
+  }
+
+  // The user's exact reported case: a param name containing a space, straight from a real
+  // Tekton admission-webhook rejection ("String/Array Names: Must only contain alphanumeric
+  // characters, hyphens (-), underscores (_), and dots (.) Must begin with a letter or an
+  // underscore (_)").
+  const spaceParamTask = parseTektonDocument(`apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: lint2
+spec:
+  params:
+    - name: lint command
+      type: string
+  steps:
+    - name: lint
+      image: alpine
+`);
+  const spaceResult = nameFormatIssues(spaceParamTask);
+  const okSpace = spaceResult.length === 1 && spaceResult[0].label === "param" && spaceResult[0].name === "lint command";
+  console.log(`  [${okSpace ? "PASS" : "FAIL"}] param name "lint command" (a space) flagged (${JSON.stringify(spaceResult)})`);
+  if (!okSpace) failures++;
+
+  const badNamesDoc = parseTektonDocument(`apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: bad-names
+spec:
+  params:
+    - name: 0banana
+      type: string
+    - name: barIsBa$
+      type: string
+    - name: fooIs-Bar_.ok
+      type: string
+    - name: an-object
+      type: object
+      properties:
+        ok:
+          type: string
+  results:
+    - name: -leading-hyphen
+  tasks:
+    - name: Not_A_DNS_Label
+      taskRef:
+        name: git-clone
+`);
+  const badResult = nameFormatIssues(badNamesDoc);
+  const okBad =
+    badResult.length === 4 &&
+    badResult.some((i) => i.label === "param" && i.name === "0banana") &&
+    badResult.some((i) => i.label === "param" && i.name === "barIsBa$") &&
+    badResult.some((i) => i.label === "result" && i.name === "-leading-hyphen") &&
+    badResult.some((i) => i.label === "task entry" && i.name === "Not_A_DNS_Label");
+  console.log(`  [${okBad ? "PASS" : "FAIL"}] invalid param (starts with digit/has "$"), result (starts with "-"), and task-entry (uppercase/underscores) names flagged, valid dotted param and object param not flagged (${JSON.stringify(badResult)})`);
+  if (!okBad) failures++;
+
+  const badStepDoc = parseTektonDocument(`apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: has-bad-step
+spec:
+  steps:
+    - name: Build_Step
+      image: alpine
+`);
+  const badStepResult = nameFormatIssues(badStepDoc);
+  const okBadStep = badStepResult.length === 1 && badStepResult[0].label === "step" && badStepResult[0].name === "Build_Step";
+  console.log(`  [${okBadStep ? "PASS" : "FAIL"}] step name "Build_Step" (uppercase/underscore) flagged (${JSON.stringify(badStepResult)})`);
+  if (!okBadStep) failures++;
+}
+
 // A taskRef/pipelineRef can also be written using Tekton's "cluster" remote-resolver shape
 // (resolver: cluster, params: [{name: kind/name/namespace, value: ...}]) instead of a plain
 // {name: ...} -- this used to resolve to nothing at all (taskRefName stayed undefined), so every

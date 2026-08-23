@@ -594,6 +594,45 @@ closed. Extracted the shared "does this identity resolve, and if not
 what's the closest match" logic into one `flagUnknownIdentityRef` helper
 used by both checks, rather than duplicating it a second time.
 
+**Name format validation** (`diagnostics.ts`, `checkNameFormats`) — param,
+result, pipeline task/finally entry, and step/sidecar names are now
+checked against Tekton's own naming rules and flagged as a warning when
+they don't match, e.g. a param named `lint command` (a space). None of
+this was previously caught by `checkSchema`: the CRD's own OpenAPI schema
+(`schemas/*.json`) declares no `pattern` for any name field — that
+validation lives entirely in Tekton's admission webhook Go code, which we
+obviously can't run, so it had to be reimplemented. Verified against
+`tektoncd/pipeline`'s actual validation source (not just its docs, and not
+just the user's report) — turned out to be three *different* rules, not
+one shared one as initially assumed from the bug report:
+- string/array param names: must start with a letter or `_`, then any of
+  alphanumeric/`-`/`_`/`.` (`task_validation.go`
+  `stringAndArrayVariableNameFormat`)
+- object param names *and* their `properties:` key names: same, but no
+  dots allowed (`objectVariableNameFormat`) — property keys themselves
+  aren't checked yet (see below)
+- Task/Step result names: alphanumeric/`-`/`_`/`.`, but must both *start
+  and end* with an alphanumeric character (`result_types.go`
+  `ResultNameFormat`)
+- Pipeline task/finally entry names: a full Kubernetes DNS-1123 label
+  (lowercase alphanumeric/`-` only, start/end alphanumeric) — checked via
+  `PipelineTask.ValidateName` (`pipeline_validation.go`), unrelated to the
+  param-name rule above despite the user's report grouping them together
+- step/sidecar names: Tekton's own webhook doesn't format-check these at
+  all (only rejects duplicates) — but they become container names, so the
+  same DNS-1123-label rule applies transitively via the Kubernetes API
+  server rejecting the Pod at TaskRun time; treated the same as pipeline
+  task names here for that reason
+
+Deliberately **not** covered: `metadata.name` (a resource's own identity —
+a different, already-handled-at-rename-time DNS-1123-subdomain rule, see
+`rename.ts`), `displayName` fields (free text, explicitly exempted by the
+user's report), workspace names (no evidence of any upstream format rule,
+just a uniqueness check), and object param `properties:` key names
+(same `objectVariableNameFormat` rule as the object param's own name, but
+not yet wired up — the AST doesn't currently expose them as named symbols
+the way params/results/tasks/steps are).
+
 ## Notable bugs found and fixed along the way
 
 - Multi-line inserts only indented their first line correctly; the trailing
@@ -669,6 +708,9 @@ used by both checks, rather than duplicating it a second time.
 - [ ] Schema-driven hover: structural diagnostics and key completion (see
       "Done" below) are wired up; hover on a key showing its schema
       description is the remaining piece of the original three-part ask.
+- [ ] Object-type param `properties:` key names aren't format-checked yet
+      (see "Name format validation" in Done) — the model doesn't currently
+      expose them as named symbols with ranges.
 - [ ] Cluster resources don't persist across a VS Code window restart —
       each new window does one fetch at startup, deliberately (see "Done"
       below for why). Worth reconsidering if that first-fetch latency ever

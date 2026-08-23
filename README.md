@@ -27,6 +27,7 @@ of future improvement.
   [{name, value}]` binding suggests that resolved task's actual param
   names as you type.
 - **Duplicate-name validation** — duplicated `name` fields in `params`, `workspaces` or `results`, as well as `tasks` and `finally` lists, are checked against.
+- **Name format validation** — param, result, pipeline task/finally entry, and step/sidecar names are checked against Tekton's own naming rules (e.g. no spaces, must start with a letter or `_`), which the schemas alone can't catch since that validation lives in Tekton's admission webhook, not its OpenAPI schema.
 - **Task-level workspace binding validation** — Works the same way as parameter validation.
 - **Schema validation** — unknown/missing keys and wrong types or enum values are checked against
   Tekton's own schemas (`schemas/`), on top of the reference checks above. Works on Helm-templated

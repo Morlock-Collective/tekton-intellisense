@@ -1,5 +1,15 @@
 import * as vscode from "vscode";
-import { NamedSymbol, ParamSymbol, ParsedTektonDoc, parseTektonFile, RefName, TektonSymbols, findCelExpressions } from "./model";
+import { isScalar } from "yaml";
+import {
+  NamedSymbol,
+  ParamSymbol,
+  ParsedTektonDoc,
+  parseTektonFile,
+  RefName,
+  TektonSymbols,
+  findCelExpressions,
+  stepAndSidecarEntryMaps,
+} from "./model";
 import { paramRefsIn, ParamRef } from "./paramRefs";
 import { closestMatch } from "./levenshtein";
 import { findDuplicateGroups } from "./duplicates";
@@ -7,6 +17,18 @@ import { findMissingRunAfter } from "./runAfterCheck";
 import { TektonWorkspaceIndex } from "./workspaceIndex";
 import { validateAgainstSchema } from "./schemaValidation";
 import { celIssuesInSource } from "./celExpr";
+
+// Verified against tektoncd/pipeline's own validation source (pkg/apis/pipeline/v1), not just its docs:
+// param names (string/array) -- task_validation.go stringAndArrayVariableNameFormat.
+const PARAM_STRING_ARRAY_NAME = /^[_a-zA-Z][_a-zA-Z0-9.-]*$/;
+// param names (object) and object property keys -- task_validation.go objectVariableNameFormat (no dots).
+const PARAM_OBJECT_NAME = /^[_a-zA-Z][_a-zA-Z0-9-]*$/;
+// Task/Step result names -- result_types.go ResultNameFormat (must start AND end alphanumeric).
+const RESULT_NAME = /^([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9]$/;
+// Pipeline task/finally entry names -- pipeline_validation.go PipelineTask.ValidateName (k8s DNS-1123 label).
+// Step/sidecar names aren't format-checked by Tekton's own webhook, but they become container names, which
+// the same DNS-1123 label rule governs at the Kubernetes API server -- so the same regex applies there too.
+const DNS1123_LABEL_NAME = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/;
 
 export const DIAGNOSTIC_SOURCE = "tekton-intellisense";
 
@@ -531,6 +553,70 @@ function checkCelExpressions(document: vscode.TextDocument, parsed: ParsedTekton
 }
 
 /** Every diagnostic for one resource within a (possibly multi-document) file. */
+/**
+ * Flags declared identifiers (param/result/task-entry/step/sidecar names)
+ * whose format Tekton's own admission webhook rejects outright -- these
+ * schemas don't declare a `pattern` for name fields (that validation lives
+ * in Go code, not the CRD's OpenAPI schema), so `checkSchema` never catches
+ * them; a name like `lint command` (a space) or `0banana` (starts with a
+ * digit) parses and passes schema validation here but is rejected at
+ * `kubectl apply` time. Doesn't cover `metadata.name` (a separate,
+ * DNS-1123-subdomain rule already enforced at rename time by rename.ts) or
+ * `displayName` fields (free text, not a referenceable identifier).
+ */
+function checkNameFormats(document: vscode.TextDocument, parsed: ParsedTektonDoc): vscode.Diagnostic[] {
+  const diagnostics: vscode.Diagnostic[] = [];
+
+  const flag = (name: string, range: [number, number] | undefined, ok: boolean, detail: string) => {
+    if (ok || !range) return;
+    const diagnostic = new vscode.Diagnostic(
+      new vscode.Range(offsetToPosition(document, range[0]), offsetToPosition(document, range[1])),
+      `"${name}" isn't a valid name: ${detail}`,
+      vscode.DiagnosticSeverity.Warning
+    );
+    diagnostic.source = DIAGNOSTIC_SOURCE;
+    diagnostics.push(diagnostic);
+  };
+
+  for (const p of parsed.symbols.params) {
+    const isObject = p.type === "object";
+    flag(
+      p.name,
+      p.range,
+      (isObject ? PARAM_OBJECT_NAME : PARAM_STRING_ARRAY_NAME).test(p.name),
+      isObject
+        ? "must only contain alphanumeric characters and hyphens (-)/underscores (_), and must begin with a letter or an underscore (_)"
+        : "must only contain alphanumeric characters, hyphens (-), underscores (_), and dots (.), and must begin with a letter or an underscore (_)"
+    );
+  }
+
+  for (const r of parsed.symbols.results) {
+    flag(
+      r.name,
+      r.range,
+      RESULT_NAME.test(r.name),
+      "must consist of alphanumeric characters, '-', '_', and '.', and must start and end with an alphanumeric character"
+    );
+  }
+
+  for (const t of parsed.symbols.tasks) {
+    flag(t.name, t.range, DNS1123_LABEL_NAME.test(t.name), "must be a valid DNS label (lowercase alphanumeric characters or '-', starting and ending with an alphanumeric character)");
+  }
+
+  for (const stepMap of stepAndSidecarEntryMaps(parsed)) {
+    const nameNode = stepMap.get("name", true);
+    if (!isScalar(nameNode) || typeof nameNode.value !== "string" || !nameNode.range) continue;
+    flag(
+      nameNode.value,
+      [nameNode.range[0], nameNode.range[1]],
+      DNS1123_LABEL_NAME.test(nameNode.value),
+      "must be a valid DNS label (lowercase alphanumeric characters or '-', starting and ending with an alphanumeric character) -- step/sidecar names become container names"
+    );
+  }
+
+  return diagnostics;
+}
+
 function computeResourceDiagnostics(
   document: vscode.TextDocument,
   parsed: ParsedTektonDoc,
@@ -544,6 +630,7 @@ function computeResourceDiagnostics(
     ...checkDuplicateNames(document, parsed.symbols.results, "result"),
     ...checkDuplicateNames(document, parsed.symbols.tasks, "task"),
     ...checkDuplicateNames(document, parsed.symbols.bindingParams, "binding parameter"),
+    ...checkNameFormats(document, parsed),
     ...checkTaskWorkspaceBindings(document, parsed.symbols),
     ...checkTaskParamBindings(document, parsed.symbols, workspaceIndex),
     ...checkTaskParamWiring(document, parsed.symbols, workspaceIndex),

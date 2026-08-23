@@ -1,11 +1,11 @@
 apiVersion: tekton.dev/v1
 kind: Task
 metadata:
-  name: lint
+  name: lint2
 spec:
   description: Runs a configurable lint command against checked-out source.
   params:
-    - name: lint-command
+    - name: lint command
       type: string
       description: Shell command used to lint the source.
       default: make lint
