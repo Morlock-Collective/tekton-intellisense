@@ -2501,6 +2501,106 @@ console.log("\nCompletion provider: $(...) trigger refs and identity ref-name fi
   );
   if (!okIdentityTask) failures++;
 
+  // A task entry's own params: [{name, value}] binding should suggest the *resolved* task's
+  // declared param names -- previously not hooked up at all (any taskRef shape), only
+  // discovered once param-wiring diagnostics started working for the cluster-resolver shape too.
+  const buildImageIndex = {
+    ...noopIndex,
+    lookupTask: (name) =>
+      name === "build-image"
+        ? { params: [{ name: "image" }, { name: "dockerfile" }, { name: "build-args" }] }
+        : undefined,
+  };
+
+  const plainTaskRefParamSnippet = [
+    "apiVersion: tekton.dev/v1",
+    "kind: Pipeline",
+    "metadata:",
+    "  name: p",
+    "spec:",
+    "  tasks:",
+    "    - name: build",
+    "      taskRef:",
+    "        name: build-image",
+    "      params:",
+    "        - name: dockerf",
+  ].join("\n");
+  const plainParamCompletions = completeAt(plainTaskRefParamSnippet, "dockerf", buildImageIndex);
+  // All three of build-image's declared params are valid suggestions here -- this snippet's
+  // params: list has only the one (in-progress) entry, no siblings yet to exclude any of them.
+  const okPlain =
+    plainParamCompletions.includes("dockerfile") &&
+    plainParamCompletions.includes("build-args") &&
+    plainParamCompletions.includes("image");
+  console.log(`  [${okPlain ? "PASS" : "FAIL"}] task entry params[].name (plain taskRef) suggests the resolved task's declared params (${JSON.stringify(plainParamCompletions)})`);
+  if (!okPlain) failures++;
+
+  // Already-bound sibling param names (here, "image") are excluded, same convention as schema
+  // key completion excluding already-present keys.
+  const withSiblingSnippet = [
+    "apiVersion: tekton.dev/v1",
+    "kind: Pipeline",
+    "metadata:",
+    "  name: p",
+    "spec:",
+    "  tasks:",
+    "    - name: build",
+    "      taskRef:",
+    "        name: build-image",
+    "      params:",
+    "        - name: image",
+    "          value: whatever",
+    "        - name: dockerf",
+  ].join("\n");
+  const withSiblingCompletions = completeAt(withSiblingSnippet, "dockerf", buildImageIndex);
+  const okSiblingExcluded = withSiblingCompletions.includes("dockerfile") && !withSiblingCompletions.includes("image");
+  console.log(`  [${okSiblingExcluded ? "PASS" : "FAIL"}] already-bound sibling param ("image") excluded from suggestions (${JSON.stringify(withSiblingCompletions)})`);
+  if (!okSiblingExcluded) failures++;
+
+  // Same completion works for the cluster-resolver taskRef shape too -- the whole point being
+  // it resolves through the same taskRefName as a plain taskRef, no separate logic needed.
+  const resolverTaskRefParamSnippet = [
+    "apiVersion: tekton.dev/v1",
+    "kind: Pipeline",
+    "metadata:",
+    "  name: p",
+    "spec:",
+    "  tasks:",
+    "    - name: build",
+    "      taskRef:",
+    "        resolver: cluster",
+    "        params:",
+    "          - name: kind",
+    "            value: task",
+    "          - name: name",
+    "            value: build-image",
+    "          - name: namespace",
+    "            value: my-namespace",
+    "      params:",
+    "        - name: dockerf",
+  ].join("\n");
+  const resolverParamCompletions = completeAt(resolverTaskRefParamSnippet, "dockerf", buildImageIndex);
+  const okResolver = resolverParamCompletions.includes("dockerfile") && resolverParamCompletions.includes("build-args");
+  console.log(`  [${okResolver ? "PASS" : "FAIL"}] task entry params[].name (cluster-resolver taskRef) also suggests the resolved task's declared params (${JSON.stringify(resolverParamCompletions)})`);
+  if (!okResolver) failures++;
+
+  // TaskRun's own top-level params: gets the same treatment.
+  const taskRunParamSnippet = [
+    "apiVersion: tekton.dev/v1",
+    "kind: TaskRun",
+    "metadata:",
+    "  name: tr",
+    "spec:",
+    "  taskRef:",
+    "    name: build-image",
+    "  params:",
+    "    - name: dockerf",
+  ].join("\n");
+  const taskRunParamCompletions = completeAt(taskRunParamSnippet, "dockerf", buildImageIndex);
+  const okTaskRun = taskRunParamCompletions.includes("dockerfile") && taskRunParamCompletions.includes("build-args");
+  console.log(`  [${okTaskRun ? "PASS" : "FAIL"}] TaskRun's own params[].name also suggests the resolved task's declared params (${JSON.stringify(taskRunParamCompletions)})`);
+  if (!okTaskRun) failures++;
+
   // Schema-key completion: falls through here whenever the cursor is inside neither a $(...) ref
   // nor an identity ref-name field -- e.g. a fresh line within a step's own map.
   const stepSnippet = [

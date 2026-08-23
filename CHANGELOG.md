@@ -7,6 +7,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 - Cluster-shared resources: reference a Task/Pipeline/etc. defined only on the cluster (`tektonIntellisense.clusterResources.*` settings, `Tekton: Configure/Refresh Cluster Resources`, `Tekton: Authenticate to Cluster`) — resolves for completion/hover/Go to Definition/diagnostics, read-only; a refresh triggered by a settings change reports success/failure visibly rather than only logging it, a configured `command` that can't be found at all (a shell alias, commonly) gets one clear message instead of a raw `ENOENT`, `command` accepts a wrapper-plus-subcommand line like `microk8s kubectl`, and a `taskRef`/`pipelineRef`/step `ref` written using Tekton's `resolver: cluster` shape (not just a plain `{name: ...}`) is recognized too
 - Unknown `taskRef`/`pipelineRef` names are now flagged with a "did you mean" suggestion, matching the check Trigger-family refs already had
+- A task entry's (or TaskRun's own) `params: [{name, value}]` binding now suggests the resolved task's actual declared param names, excluding ones already bound — previously not hooked up at all, for any taskRef shape
 
 ## [0.8.0] - 2026-08-20
 

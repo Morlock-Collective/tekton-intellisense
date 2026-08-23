@@ -543,6 +543,22 @@ highlighting/hover/rename treatment as a local one, for the same reason
 extending it cost nothing extra: the function was already fully general,
 it just hadn't been wired to that third call site yet.
 
+**Task param-binding-name completion** (`completions.ts`) — a Pipeline
+task entry's (or TaskRun's own) `params: [{name, value}]` binding now
+suggests the resolved task's actual declared param names, excluding
+whichever ones that same entry already binds elsewhere (the one under
+the cursor isn't excluded from its own suggestions, obviously). Reported
+missing once param-wiring *validation* started working for the
+`resolver: cluster` shape — but turned out to be missing for every
+taskRef shape, plain included; this had simply never been built.
+`taskParamBindingContextAt` is the direct counterpart to the
+already-existing `identityRefContextAt` (which completes `taskRef.name`
+itself): same "is the cursor on this scalar's committed range" pattern,
+reusing the exact `paramBindings`/`params` ranges diagnostics and rename
+already read, so it works identically regardless of how `taskRefName`
+was resolved — plain `taskRef: {name: ...}` or the cluster resolver
+shape both flow through the one shared field.
+
 **Unknown taskRef/pipelineRef validation** (`diagnostics.ts`) — a Pipeline
 task entry's (or TaskRun's own) `taskRef`, and a PipelineRun's own
 `pipelineRef`, are now flagged with a "did you mean" suggestion when the

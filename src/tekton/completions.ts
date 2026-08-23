@@ -109,6 +109,53 @@ function identityRefContextAt(symbols: TektonSymbols, offset: number): IdentityR
   return undefined;
 }
 
+interface TaskParamBindingContext {
+  /** offset range of the binding's `name` scalar under the cursor */
+  range: [number, number];
+  /** the resolved Task/ClusterTask/StepAction this binding is providing a value to */
+  taskRefName: string;
+  /** every *other* param name this same task entry (or TaskRun) already binds, so they're excluded from suggestions -- the one at `range` itself isn't, since that's exactly what's being replaced */
+  siblingNames: string[];
+}
+
+/**
+ * Finds a Pipeline task entry's (or TaskRun's own) `params: [{name, value}]`
+ * binding-name scalar at `offset`, if any — the counterpart to
+ * {@link identityRefContextAt} for suggesting *which params a resolved
+ * task actually declares*, rather than which task/pipeline/etc. exists.
+ * Reuses the exact same `taskRefName`/`paramBindings` ranges
+ * `diagnostics.ts`'s param-wiring checks and rename already read, so this
+ * works identically whether the entry uses a plain `taskRef: {name: ...}`
+ * or Tekton's `resolver: cluster` shape — whatever resolved `taskRefName`,
+ * not how it got there.
+ */
+function taskParamBindingContextAt(symbols: TektonSymbols, offset: number): TaskParamBindingContext | undefined {
+  for (const task of symbols.tasks) {
+    if (!task.taskRefName) continue;
+    for (const pb of task.paramBindings) {
+      if (inOffsetRange(pb.range, offset)) {
+        return {
+          range: pb.range!,
+          taskRefName: task.taskRefName,
+          siblingNames: task.paramBindings.filter((other) => other !== pb).map((other) => other.name),
+        };
+      }
+    }
+  }
+  if (symbols.kind === "TaskRun" && symbols.taskRefName) {
+    for (const p of symbols.params) {
+      if (inOffsetRange(p.range, offset)) {
+        return {
+          range: p.range!,
+          taskRefName: symbols.taskRefName,
+          siblingNames: symbols.params.filter((other) => other !== p).map((other) => other.name),
+        };
+      }
+    }
+  }
+  return undefined;
+}
+
 function item(
   label: string,
   range: vscode.Range,
@@ -192,11 +239,26 @@ export class TektonRefCompletionProvider implements vscode.CompletionItemProvide
     position: vscode.Position,
     symbols: TektonSymbols
   ): vscode.CompletionItem[] | undefined {
-    const target = identityRefContextAt(symbols, document.offsetAt(position));
-    if (!target) return undefined;
+    const offset = document.offsetAt(position);
 
-    const replaceRange = new vscode.Range(document.positionAt(target.range[0]), document.positionAt(target.range[1]));
-    return target.names(this.workspaceIndex).map((name) => item(name, replaceRange, vscode.CompletionItemKind.Reference, target.detail));
+    const target = identityRefContextAt(symbols, offset);
+    if (target) {
+      const replaceRange = new vscode.Range(document.positionAt(target.range[0]), document.positionAt(target.range[1]));
+      return target.names(this.workspaceIndex).map((name) => item(name, replaceRange, vscode.CompletionItemKind.Reference, target.detail));
+    }
+
+    const paramTarget = taskParamBindingContextAt(symbols, offset);
+    if (paramTarget) {
+      const resolved = this.workspaceIndex.lookupTask(paramTarget.taskRefName);
+      if (!resolved) return undefined;
+      const already = new Set(paramTarget.siblingNames);
+      const replaceRange = new vscode.Range(document.positionAt(paramTarget.range[0]), document.positionAt(paramTarget.range[1]));
+      return resolved.params
+        .filter((p) => !already.has(p.name))
+        .map((p) => item(p.name, replaceRange, vscode.CompletionItemKind.Variable, `param of ${paramTarget.taskRefName}`));
+    }
+
+    return undefined;
   }
 
   private completionsFor(ctx: RefContext, parsed: ParsedTektonDoc): vscode.CompletionItem[] {

@@ -23,7 +23,9 @@ of future improvement.
   distance) and a quick fix to apply it. A Pipeline task entry's (or
   TaskRun's/PipelineRun's own) `taskRef`/`pipelineRef` gets the same
   treatment against every Task/Pipeline the workspace (and, if configured,
-  the cluster — see below) actually knows about.
+  the cluster — see below) actually knows about, and its own `params:
+  [{name, value}]` binding suggests that resolved task's actual param
+  names as you type.
 - **Duplicate-name validation** — duplicated `name` fields in `params`, `workspaces` or `results`, as well as `tasks` and `finally` lists, are checked against.
 - **Task-level workspace binding validation** — Works the same way as parameter validation.
 - **Schema validation** — unknown/missing keys and wrong types or enum values are checked against
