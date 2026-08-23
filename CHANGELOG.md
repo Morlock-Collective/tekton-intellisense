@@ -9,6 +9,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Unknown `taskRef`/`pipelineRef` names are now flagged with a "did you mean" suggestion, matching the check Trigger-family refs already had
 - A task entry's (or TaskRun's own) `params: [{name, value}]` binding now suggests the resolved task's actual declared param names, excluding ones already bound — previously not hooked up at all, for any taskRef shape, and still not for a completely blank `name: ` (the most common case) until reworked to check the enclosing `params:` list's own range instead of the individual binding's
 - Param, result, pipeline task/finally entry, step, and sidecar names are now checked against Tekton's own naming rules (e.g. no spaces, must start with a letter/underscore) — the schemas never caught this, since that validation lives in Tekton's admission webhook, not the CRD's OpenAPI schema
+- `Tekton: Add Task to Pipeline` can now add a cluster-resolved task (Tekton's `resolver: cluster` shape) instead of only a local `taskRef: { name: ... }`, with the namespace picked from `tektonIntellisense.clusterResources.sources` or typed in, and left unspecified (falling back to the cluster resolver's own configured default) if you don't want to pin one
+
+### Fixed
+- `Tekton: Add Task to Pipeline` inserted the new task entry at the indentation of the *last existing task entry's own deepest last field* instead of the task list's own indentation, whenever that field was itself deeply nested (e.g. a cluster-resolver taskRef's own `params:` list) — producing invalid, wildly over-indented YAML. Root cause was `insertSnippet`'s automatic reindentation of multi-line snippet text to the current line; switched every structural insertion command to a plain text edit instead, which inserts exactly the (already correctly indented) text computed for it
 
 ## [0.8.0] - 2026-08-20
 

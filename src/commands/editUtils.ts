@@ -33,12 +33,17 @@ export function toEnvVarName(name: string): string {
  * function adds `indent` uniformly so getting nesting right only requires
  * getting the relative indents right once.
  *
- * Built via `SnippetString#appendText`, not the constructor, so the text is
- * escaped as literal content — `lines` routinely embeds free-text user
- * input (a description, a default value), and `$1`/`${1:x}`/`$NAME` are
- * live snippet syntax to `vscode.SnippetString`. Without escaping, a
- * description as ordinary as "cost is $5" would be silently reinterpreted
- * as a tabstop instead of inserted as written.
+ * A plain `TextEditor#edit` insert, deliberately NOT `insertSnippet` —
+ * `insertSnippet` reindents every line after the first to match the
+ * *current* line's own indentation (there's a `keepWhitespace` option to
+ * suppress this, but it's newer than this extension's minimum supported
+ * VS Code version). `position` routinely lands at the end of a deeply
+ * nested last item (e.g. a task entry whose own last field is a
+ * cluster-resolver's `params:` list several levels deeper than the task
+ * entry itself) — reindenting to THAT line's indentation, on top of the
+ * absolute indentation already baked into `lines` here, produced
+ * doubly-indented, invalid output. A plain edit inserts exactly the text
+ * computed here, nothing more.
  */
 export async function insertBlockAfter(
   editor: vscode.TextEditor,
@@ -46,8 +51,13 @@ export async function insertBlockAfter(
   lines: string[],
   indent: string
 ): Promise<void> {
-  const snippet = new vscode.SnippetString().appendText(blockAfterText(lines, indent));
-  await editor.insertSnippet(snippet, position);
+  const text = blockAfterText(lines, indent);
+  const applied = await editor.edit((editBuilder) => editBuilder.insert(position, text));
+  if (!applied) return;
+  const endOffset = editor.document.offsetAt(position) + text.length;
+  const endPosition = editor.document.positionAt(endOffset);
+  editor.selection = new vscode.Selection(endPosition, endPosition);
+  editor.revealRange(new vscode.Range(endPosition, endPosition));
 }
 
 function stepEntryLabel(entry: YAMLMap, index: number): string {

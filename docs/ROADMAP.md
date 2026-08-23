@@ -633,6 +633,42 @@ just a uniqueness check), and object param `properties:` key names
 not yet wired up — the AST doesn't currently expose them as named symbols
 the way params/results/tasks/steps are).
 
+**"Add Task" indentation bug + cluster-resolved task support**
+(`commands/addTask.ts`, `commands/editUtils.ts`) — reported live: adding a
+task after an existing entry whose own last field was itself deeply
+nested (a cluster-resolver taskRef's `params:` list) inserted the new
+entry at that nested depth instead of the task list's own, producing
+invalid YAML. Root cause was `editUtils.ts#insertBlockAfter`'s use of
+`vscode.TextEditor#insertSnippet`: VS Code reindents every line after the
+first in a multi-line snippet to match the *current* line's own
+indentation (there's a `keepWhitespace` option to suppress this, added
+after this extension's `engines.vscode` minimum, so not usable without
+also raising that floor) — exactly wrong here, since `insertBlockAfter`
+already computes full absolute indentation for every line itself, and the
+anchor position (end of the last item) routinely sits on a far more
+deeply indented line than the new item belongs at. Fixed by switching to a
+plain `TextEditor#edit` insert instead: inserts exactly the text computed
+for it, nothing more, and (as a side benefit) no longer needs
+`SnippetString`'s escaping of literal `$`/`}` in free-text user input,
+since a plain edit never interprets snippet syntax at all. Shared by
+every structural insertion command (`addTask`, `addParameter`,
+`addConditional`, `bindParamToEnv`/`bindAllParamsToEnv`), fixed once at
+the shared primitive. The existing "mirrors the splicing logic" pure-JS
+tests could never have caught this (they only re-derive the same
+absolute-indent text math, which was always correct) — added a real
+integration test that drives the actual `insertBlockAfter` through a
+minimal mutable-document/editor shim, reproducing the exact reported
+YAML.
+
+While in there, extended `addTask` per the same conversation: choosing
+"Cluster-resolved task" instead of "Local task" now generates the
+`resolver: cluster` shape (`kind: task`, `name`, optionally `namespace`)
+instead of a plain `taskRef: { name: ... }` — namespace is offered from
+`tektonIntellisense.clusterResources.sources` if any are configured, or
+typed in, or left unspecified entirely (Tekton's cluster resolver falls
+back to its own `default-namespace` config in that case, so omitting it
+is a legitimate choice, not an incomplete one).
+
 ## Notable bugs found and fixed along the way
 
 - Multi-line inserts only indented their first line correctly; the trailing

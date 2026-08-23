@@ -1098,6 +1098,100 @@ console.log("\naddTask simulation (context-aware target + no cursor):");
   }
 }
 
+console.log("\naddTask: local vs cluster-resolved taskRef (addTask.ts's taskRefLines):");
+{
+  // addTask.ts imports "vscode" at module scope, and itself imports editUtils.ts (which does
+  // touch vscode.Position/Range/Selection, just not until insertBlockAfter is actually called) --
+  // taskRefLines needs none of that, but Node's require() cache is keyed by file path regardless
+  // of which shim was active when a module first loaded, and editUtils.ts is required again later
+  // (with a fuller shim) by the insertBlockAfter test below. Using a shim with fewer classes than
+  // that one here would poison the cached editUtils.js module for that later test, so this reuses
+  // the same minimal-but-complete shim rather than an empty one.
+  class Position {
+    constructor(line, character) {
+      this.line = line;
+      this.character = character;
+    }
+  }
+  class Range {
+    constructor(start, end) {
+      this.start = start;
+      this.end = end;
+    }
+  }
+  class Selection extends Range {}
+
+  const Module = require("module");
+  const originalLoad = Module._load;
+  Module._load = function (request, ...rest) {
+    if (request === "vscode") return { Position, Range, Selection };
+    return originalLoad.call(this, request, ...rest);
+  };
+  const { taskRefLines } = require("../out/commands/addTask");
+  Module._load = originalLoad;
+
+  const local = taskRefLines("xyz", undefined);
+  const okLocal = JSON.stringify(local) === JSON.stringify(["taskRef:", "  name: xyz"]);
+  console.log(`  [${okLocal ? "PASS" : "FAIL"}] local taskRef: plain "name: xyz" (${JSON.stringify(local)})`);
+  if (!okLocal) failures++;
+
+  const clusterWithNamespace = taskRefLines("xyz", "my-namespace");
+  const okClusterNs =
+    JSON.stringify(clusterWithNamespace) ===
+    JSON.stringify([
+      "taskRef:",
+      '  resolver: "cluster"',
+      "  params:",
+      "    - name: kind",
+      "      value: task",
+      "    - name: name",
+      "      value: xyz",
+      "    - name: namespace",
+      "      value: my-namespace",
+    ]);
+  console.log(`  [${okClusterNs ? "PASS" : "FAIL"}] cluster-resolved taskRef with namespace (${JSON.stringify(clusterWithNamespace)})`);
+  if (!okClusterNs) failures++;
+
+  // "" means the user deliberately chose not to specify a namespace -- Tekton's cluster resolver
+  // falls back to its own configured default-namespace, so the params list should end at "name",
+  // no namespace param emitted at all (not a namespace param with a blank value).
+  const clusterNoNamespace = taskRefLines("xyz", "");
+  const okClusterNoNs =
+    JSON.stringify(clusterNoNamespace) ===
+    JSON.stringify(["taskRef:", '  resolver: "cluster"', "  params:", "    - name: kind", "      value: task", "    - name: name", "      value: xyz"]);
+  console.log(`  [${okClusterNoNs ? "PASS" : "FAIL"}] cluster-resolved taskRef, no namespace specified (${JSON.stringify(clusterNoNamespace)})`);
+  if (!okClusterNoNs) failures++;
+
+  // Full splice through simulateAddTask, to confirm the generated lines land correctly indented
+  // and produce a Pipeline that actually parses back with the expected shape (not just that
+  // taskRefLines itself is right in isolation).
+  const itemLines = [
+    "- name: abc",
+    ...taskRefLines("xyz", "my-namespace").map((l) => "  " + l),
+    "  runAfter: []",
+    "  params: []",
+  ];
+  const source = fs.readFileSync(path.join(__dirname, "pipeline-typo.yaml"), "utf8");
+  const { owner, result } = simulateAddTask(source, itemLines);
+  let after, okSplice;
+  try {
+    after = YAML.parse(result);
+    const entry = after.spec.tasks.find((t) => t.name === "abc");
+    okSplice =
+      owner !== undefined &&
+      entry?.taskRef?.resolver === "cluster" &&
+      entry.taskRef.params?.find((p) => p.name === "name")?.value === "xyz" &&
+      entry.taskRef.params?.find((p) => p.name === "namespace")?.value === "my-namespace";
+  } catch {
+    okSplice = false;
+  }
+  console.log(`  [${okSplice ? "PASS" : "FAIL"}] spliced into a real Pipeline, parses back with resolver: cluster and the right params`);
+  if (!okSplice) {
+    console.log(result);
+    failures++;
+  }
+}
+
 /** Mirrors editUtils.ts's indentAt() — leading whitespace only, stopping before any "- " sequence marker. */
 function indentAtOffset(text, offset) {
   const lineStart = text.lastIndexOf("\n", offset - 1) + 1;
@@ -3631,10 +3725,137 @@ spec:
   if (!foldedOk) failures++;
 }
 
-// Everything above is synchronous; fetchClusterResources is the one async piece of logic in this
-// whole file (it issues concurrent fake "kubectl" calls), so the final summary/exit is deferred
-// until this resolves rather than converting the rest of the file to async.
+// Everything above is synchronous; fetchClusterResources and insertBlockAfter (below) are the
+// only async pieces of logic in this whole file, so the final summary/exit is deferred until
+// this resolves rather than converting the rest of the file to async.
 async function runAsyncChecks() {
+  // Regression test for the real editUtils.ts#insertBlockAfter, not just the pure splicing math
+  // (`simulateAddTask` above only mirrors that math, so it could never have caught this): a
+  // Pipeline task entry whose own last field is deeply nested (e.g. a cluster-resolver taskRef's
+  // own `params:` list) used to make "Add task" insert the new entry at THAT nested depth
+  // instead of the tasks: list's own depth. Root cause was `insertSnippet`, which reindents every
+  // line after the first to match the *current* line's indentation -- exactly wrong when the
+  // insertion point sits at the end of a deeply nested last line. Fixed by switching to a plain
+  // `editor.edit` insert (see editUtils.ts), so this drives the real function through a minimal
+  // mutable-document/editor shim instead of re-deriving the splicing logic a second time.
+  console.log("\ninsertBlockAfter (editUtils.ts): correct indentation after a deeply nested last item:");
+  {
+    class Position {
+      constructor(line, character) {
+        this.line = line;
+        this.character = character;
+      }
+    }
+    class Range {
+      constructor(start, end) {
+        this.start = start;
+        this.end = end;
+      }
+    }
+    class Selection extends Range {}
+
+    const vscodeShim = { Position, Range, Selection };
+    const Module = require("module");
+    const originalLoad = Module._load;
+    Module._load = function (request, ...rest) {
+      if (request === "vscode") return vscodeShim;
+      return originalLoad.call(this, request, ...rest);
+    };
+    const { insertBlockAfter, indentAt } = require("../out/commands/editUtils");
+    Module._load = originalLoad;
+
+    function makeMutableDocument(initialText) {
+      let text = initialText;
+      const lineOffsets = () => {
+        const lines = text.split("\n");
+        const offsets = [0];
+        for (const l of lines.slice(0, -1)) offsets.push(offsets[offsets.length - 1] + l.length + 1);
+        return { lines, offsets };
+      };
+      return {
+        getText: () => text,
+        lineAt: (line) => ({ text: lineOffsets().lines[line] }),
+        offsetAt: (pos) => lineOffsets().offsets[pos.line] + pos.character,
+        positionAt: (offset) => {
+          const { offsets } = lineOffsets();
+          let line = 0;
+          while (line + 1 < offsets.length && offsets[line + 1] <= offset) line++;
+          return new Position(line, offset - offsets[line]);
+        },
+        _insert: (offset, insertText) => {
+          text = text.slice(0, offset) + insertText + text.slice(offset);
+        },
+      };
+    }
+
+    function makeEditor(document) {
+      return {
+        document,
+        selection: undefined,
+        revealRange: () => {},
+        edit: async (callback) => {
+          callback({ insert: (position, insertText) => document._insert(document.offsetAt(position), insertText) });
+          return true;
+        },
+      };
+    }
+
+    // The user's exact reported reproduction: one existing task entry whose last field is a
+    // cluster-resolver taskRef's own (deeply nested) params: list.
+    const source = `apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: "my-pipeline"
+spec:
+  description: Some pipeline
+  displayName: The display name
+  params:
+    - name: some_param
+      default: "Never mind"
+  tasks:
+    - name: some-task
+      taskRef:
+        resolver: "cluster"
+        params:
+          - name: kind
+            value: task
+          - name: name
+            value: "build-image"
+          - name: namespace
+            value: my-namespace
+`;
+    const parsed = parseTektonDocument(source);
+    const owner = resolvePipelineSpecOwner(parsed);
+    const seq = findSeqIn(owner.ownerMap, "tasks");
+    const lastItem = seq.items[seq.items.length - 1];
+    const anchorOffset = trimTrailingNewline(parsed.text, lastItem.range[1]);
+
+    const document = makeMutableDocument(source);
+    const editor = makeEditor(document);
+    const itemIndent = indentAt(document, document.positionAt(seq.range[0]));
+    const itemLines = ["- name: abc", "  taskRef:", "    name: xyz", "  runAfter: []", "  params: []"];
+
+    await insertBlockAfter(editor, document.positionAt(anchorOffset), itemLines, itemIndent);
+    const result = document.getText();
+
+    const expectedBlock = "\n    - name: abc\n      taskRef:\n        name: xyz\n      runAfter: []\n      params: []";
+    const okIndent = result.includes(expectedBlock);
+    let okParses = false;
+    try {
+      const after = YAML.parse(result);
+      okParses = after.spec.tasks.length === 2 && after.spec.tasks[1].name === "abc" && after.spec.tasks[1].taskRef.name === "xyz";
+    } catch {
+      okParses = false;
+    }
+    console.log(
+      `  [${okIndent && okParses ? "PASS" : "FAIL"}] new task entry lands at the tasks: list's own indent (4 spaces), not the last item's deeply nested last field's`
+    );
+    if (!okIndent || !okParses) {
+      console.log(result);
+      failures++;
+    }
+  }
+
   console.log("\nCluster resource fetching (clusterResources.ts):");
   {
     const okKindCheck =

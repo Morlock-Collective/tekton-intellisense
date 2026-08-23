@@ -101,7 +101,10 @@ of future improvement.
     `pipelineSpec`/`taskSpec`, in which case it gets a declaration there.
   - `Tekton: Add Task to Pipeline` — appends a new `spec.tasks[]` (or
     `spec.finally[]`) entry with a `taskRef`/`runAfter`/`params` skeleton,
-    to a Pipeline or a PipelineRun's inline `pipelineSpec`.
+    to a Pipeline or a PipelineRun's inline `pipelineSpec`. Choose a local
+    task (`taskRef: { name: ... }`) or a cluster-resolved one (Tekton's
+    `resolver: cluster` shape, with a namespace picked from your
+    configured cluster sources or typed in).
   - `Tekton: Add When Expression to Task` — adds a `when:` condition to a
     task entry: the one under your cursor if there is one, otherwise pick
     from a list of the Pipeline's tasks.
