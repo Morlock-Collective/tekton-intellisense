@@ -16,6 +16,7 @@ const {
   findSeqIn,
   findSpecMap,
   trimTrailingNewline,
+  stepActionRefs,
 } = require("../out/tekton/model");
 const { findParamRefs } = require("../out/tekton/paramRefs");
 const { closestMatch } = require("../out/tekton/levenshtein");
@@ -1876,6 +1877,35 @@ spec:
   const okPipelineRun = clusterResolverRun.symbols.pipelineRefName === "build-and-test";
   console.log(`  [${okPipelineRun ? "PASS" : "FAIL"}] PipelineRun's own pipelineRef resolves the same way ("${clusterResolverRun.symbols.pipelineRefName}")`);
   if (!okPipelineRun) failures++;
+
+  // A step's own ref (pointing at a shared StepAction) supports the cluster resolver too --
+  // per upstream docs (tektoncd/pipeline/docs/cluster-resolver.md), kind: stepaction is
+  // documented alongside task/pipeline specifically for this case.
+  const clusterResolverStep = parseTektonDocument(`apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: uses-remote-stepaction
+spec:
+  steps:
+    - name: step-action-example
+      ref:
+        resolver: cluster
+        params:
+          - name: kind
+            value: stepaction
+          - name: name
+            value: some-stepaction
+          - name: namespace
+            value: namespace-containing-stepaction
+`);
+  const stepRefs = stepActionRefs(clusterResolverStep);
+  const okStepRef = stepRefs.length === 1 && stepRefs[0].name === "some-stepaction";
+  const okStepRefRange =
+    okStepRef && clusterResolverStep.text.slice(...stepRefs[0].range) === "some-stepaction";
+  console.log(
+    `  [${okStepRef && okStepRefRange ? "PASS" : "FAIL"}] a step's ref using the cluster resolver (kind: stepaction) resolves too (${JSON.stringify(stepRefs)})`
+  );
+  if (!okStepRef || !okStepRefRange) failures++;
 }
 
 // Mirrors checkTriggerTemplateParamWiring in diagnostics.ts (same vscode-free

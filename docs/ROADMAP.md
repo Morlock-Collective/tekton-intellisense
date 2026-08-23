@@ -510,24 +510,38 @@ from, and that it's read-only.
 
 A `taskRef`/`pipelineRef` written using Tekton's `resolver: cluster`
 remote-resolution shape (`{resolver: cluster, params: [{name: kind/name/
-namespace, value: ...}]}`, https://tekton.dev/docs/pipelines/cluster-resolver/)
-is now recognized too, not just a plain `{name: ...}` — originally
-scoped out of v1 as "matches by name regardless of resolver syntax",
-but live testing surfaced that this shape resolved to *nothing at all*
-(`taskRefName` stayed undefined), silently skipping every downstream
-check: no unknown-ref warning, no missing-required-param warning,
-nothing, exactly the "no intellisense at all" symptom that prompted
-looking at it. `taskOrPipelineRefNameAndRange` reads the resolver's
-`name` param (with that param's own value range, so a diagnostic still
-points at the actual name text) when there's no plain `name` present,
-feeding it into the same `taskRefName`/`pipelineRefName` fields
-everything else already reads — so every existing check (param-wiring,
-unknown-ref, completion, hover) works for a resolver-shaped ref with no
-separate logic needed anywhere downstream, the same "narrow integration
-surface" approach used throughout this feature. Any resolver type other
-than `cluster` (`git`/`bundles`/`hub`/...) has an entirely different,
-unrelated param shape and is deliberately left alone rather than
-misread.
+namespace, value: ...}]}`) is now recognized too, not just a plain
+`{name: ...}` — originally scoped out of v1 as "matches by name
+regardless of resolver syntax", but live testing surfaced that this
+shape resolved to *nothing at all* (`taskRefName` stayed undefined),
+silently skipping every downstream check: no unknown-ref warning, no
+missing-required-param warning, nothing, exactly the "no intellisense at
+all" symptom that prompted looking at it. `identityRefNameAndRange`
+reads the resolver's `name` param (with that param's own value range,
+so a diagnostic still points at the actual name text) when there's no
+plain `name` present, feeding it into the same `taskRefName`/
+`pipelineRefName` fields everything else already reads — so every
+existing check (param-wiring, unknown-ref, completion, hover) works for
+a resolver-shaped ref with no separate logic needed anywhere downstream,
+the same "narrow integration surface" approach used throughout this
+feature. Any resolver type other than `cluster` (`git`/`bundles`/`hub`/
+...) has an entirely different, unrelated param shape and is
+deliberately left alone rather than misread.
+
+Verified against the authoritative source
+(`tektoncd/pipeline/docs/cluster-resolver.md`, not just recollection —
+checked precisely *because* the first version of this was written from
+memory rather than a real fetch) rather than left as an assumption. That
+turned up one thing the initial implementation missed entirely: the
+same resolver shape is also documented for a **step's own `ref`**
+(referencing a shared `StepAction` remotely, `kind: stepaction`
+alongside `task`/`pipeline`) — not just `taskRef`/`pipelineRef`.
+`identityRefNameAndRange` (renamed from `taskOrPipelineRefNameAndRange`
+once it stopped being specific to those two) now backs
+`stepActionRefs` too, so a step's remotely-resolved `ref` gets the same
+highlighting/hover/rename treatment as a local one, for the same reason
+extending it cost nothing extra: the function was already fully general,
+it just hadn't been wired to that third call site yet.
 
 **Unknown taskRef/pipelineRef validation** (`diagnostics.ts`) — a Pipeline
 task entry's (or TaskRun's own) `taskRef`, and a PipelineRun's own

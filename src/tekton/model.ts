@@ -234,18 +234,22 @@ function clusterResolverParams(resolverMap: YAMLMap): { kind?: string; name?: st
 }
 
 /**
- * Like {@link refNameAndRange}, for `taskRef`/`pipelineRef` specifically —
- * falls back to the `cluster` remote-resolver shape
- * (`{ resolver: cluster, params: [{name: kind/name/namespace, value: ...}] }`)
- * when there's no plain `name`, so a Pipeline task entry (or a
- * TaskRun's/PipelineRun's own ref) written this way resolves against
- * cluster-fetched resources — completion, hover, the unknown-ref and
- * param-wiring diagnostics — exactly like a plain `taskRef: {name: ...}`
- * does, with no separate logic needed anywhere downstream. Any other
- * resolver type is deliberately left alone (name/range both undefined)
- * rather than guessed at, same reasoning as {@link clusterResolverParams}.
+ * Like {@link refNameAndRange}, for an identity ref that can also be
+ * written using Tekton's `cluster` remote-resolver shape — `taskRef`,
+ * `pipelineRef`, and a step's own `ref` (which the resolver docs
+ * document `kind: stepaction` for, alongside `task`/`pipeline`; see
+ * https://github.com/tektoncd/pipeline/blob/main/docs/cluster-resolver.md).
+ * Falls back to `{ resolver: cluster, params: [{name: kind/name/
+ * namespace, value: ...}] }` when there's no plain `name`, so a ref
+ * written this way resolves against cluster-fetched resources —
+ * completion, hover, the unknown-ref and param-wiring diagnostics, and
+ * highlighting/rename via `stepActionRefs` — exactly like a plain
+ * `{name: ...}` does, with no separate logic needed anywhere downstream.
+ * Any other resolver type is deliberately left alone (name/range both
+ * undefined) rather than guessed at, same reasoning as
+ * {@link clusterResolverParams}.
  */
-function taskOrPipelineRefNameAndRange(map: YAMLMap | undefined, key: string): { name?: string; range?: [number, number] } {
+function identityRefNameAndRange(map: YAMLMap | undefined, key: string): { name?: string; range?: [number, number] } {
   const ref = mapOf(map?.get(key, true));
   const direct = refNameAndRange(map, key);
   if (direct.name) return direct;
@@ -380,7 +384,7 @@ function taskParamBindings(seq: YAMLSeq | undefined): RefName[] {
 function taskEntries(seq: YAMLSeq | undefined): TaskSymbol[] {
   const out: TaskSymbol[] = [];
   forEachNamedItem(seq, (m, name, range) => {
-    const taskRef = taskOrPipelineRefNameAndRange(m, "taskRef");
+    const taskRef = identityRefNameAndRange(m, "taskRef");
     const workspaceBindings = taskWorkspaceBindings(seqOf(m.get("workspaces", true)));
     const runAfter = scalarNameList(seqOf(m.get("runAfter", true)));
     const paramBindings = taskParamBindings(seqOf(m.get("params", true)));
@@ -542,8 +546,8 @@ function extractSymbols(doc: Document.Parsed): TektonSymbols | undefined {
 
   const spec = mapOf(root.get("spec", true));
 
-  const pipelineRef = kind === "PipelineRun" ? taskOrPipelineRefNameAndRange(spec, "pipelineRef") : undefined;
-  const ownTaskRef = kind === "TaskRun" ? taskOrPipelineRefNameAndRange(spec, "taskRef") : undefined;
+  const pipelineRef = kind === "PipelineRun" ? identityRefNameAndRange(spec, "pipelineRef") : undefined;
+  const ownTaskRef = kind === "TaskRun" ? identityRefNameAndRange(spec, "taskRef") : undefined;
   const ownTemplateRef = kind === "Trigger" ? scalarRefField(spec, "template") : undefined;
   const ownBindingsSeq = kind === "Trigger" ? seqOf(spec?.get("bindings", true)) : undefined;
   const ownBindingRefs = kind === "Trigger" ? scalarRefList(ownBindingsSeq) : [];
@@ -899,12 +903,14 @@ export function findEnclosingStepEntry(parsed: ParsedTektonDoc, offset: number):
  * StepAction shares its identity namespace with Task/ClusterTask (see
  * `TASK_LIKE_KINDS`, and `workspaceIndex.ts`'s "task" group), so this is
  * the same kind of reference as a Pipeline task entry's `taskRef.name`,
- * just from inside a step instead.
+ * just from inside a step instead — including the `cluster` remote-resolver
+ * shape (`kind: stepaction`), which {@link identityRefNameAndRange} also
+ * recognizes here for the same reason it does for taskRef/pipelineRef.
  */
 export function stepActionRefs(parsed: ParsedTektonDoc): RefName[] {
   const out: RefName[] = [];
   for (const step of stepAndSidecarEntryMaps(parsed)) {
-    const ref = refNameAndRange(step, "ref");
+    const ref = identityRefNameAndRange(step, "ref");
     if (ref.name && ref.range) out.push({ name: ref.name, range: ref.range });
   }
   return out;
