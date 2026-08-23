@@ -245,7 +245,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand("tekton-intellisense.bindParamToEnv", bindParamToEnvCommand),
     vscode.commands.registerCommand("tekton-intellisense.bindAllParamsToEnv", bindAllParamsToEnvCommand),
-    vscode.commands.registerCommand("tekton-intellisense.addTask", addTaskCommand),
+    vscode.commands.registerCommand("tekton-intellisense.addTask", () => addTaskCommand(workspaceIndex)),
     vscode.commands.registerCommand("tekton-intellisense.addConditional", addConditionalCommand),
     vscode.commands.registerCommand("tekton-intellisense.addParameter", addParameterCommand),
     vscode.commands.registerCommand("tekton-intellisense.editTaskScript", editTaskScriptCommand),

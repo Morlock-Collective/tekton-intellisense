@@ -1,6 +1,8 @@
 import * as vscode from "vscode";
 import { findSeqIn, parseTektonFile, findResourceAt, resolvePipelineSpecOwner, trimTrailingNewline } from "../tekton/model";
 import { indentAt, insertBlockAfter } from "./editUtils";
+import { quoteYamlString } from "./snippetText";
+import { TektonWorkspaceIndex } from "../tekton/workspaceIndex";
 
 const K8S_NAME_VALIDATION = (v: string): string | undefined =>
   /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/.test(v) ? undefined : "must be a valid Kubernetes name";
@@ -52,6 +54,20 @@ export function taskRefLines(taskRef: string, namespace: string | undefined): st
 }
 
 /**
+ * The new task entry's own `params:` lines (relative indent, matching
+ * {@link taskRefLines}) — one blank-valued binding per required param
+ * (no `default`) the referenced Task declares, the same shape
+ * `codeActions.ts`'s "add missing param" quick fix inserts, or a bare
+ * `params: []` when the Task isn't known (an unresolvable name, or one
+ * with no required params) — nothing to pre-fill in that case, same as
+ * before this existed.
+ */
+export function paramsLines(requiredParamNames: string[]): string[] {
+  if (requiredParamNames.length === 0) return ["params: []"];
+  return ["params:", ...requiredParamNames.flatMap((name) => [`  - name: ${name}`, `    value: ${quoteYamlString("")}`])];
+}
+
+/**
  * Adds a new task entry to spec.tasks (or spec.finally) — appended after
  * the last existing entry when the list exists, or the list created fresh
  * otherwise. Cursor position is never consulted: the owning Pipeline
@@ -59,7 +75,7 @@ export function taskRefLines(taskRef: string, namespace: string | undefined): st
  * pipelineSpec) is resolved purely from the document's structure, the same
  * way addParameter resolves where a parameter belongs.
  */
-export async function addTaskCommand(): Promise<void> {
+export async function addTaskCommand(workspaceIndex: TektonWorkspaceIndex): Promise<void> {
   const editor = vscode.window.activeTextEditor;
   if (!editor) return;
 
@@ -110,11 +126,14 @@ export async function addTaskCommand(): Promise<void> {
     placeHolder: "Add to spec.tasks or spec.finally?",
   })) ?? "tasks";
 
+  const resolvedTask = workspaceIndex.lookupTask(taskRef);
+  const requiredParamNames = resolvedTask?.params.filter((p) => p.default === undefined).map((p) => p.name) ?? [];
+
   const itemLines = [
     `- name: ${taskName}`,
     ...taskRefLines(taskRef, namespace).map((l) => "  " + l),
     `  runAfter: []`,
-    `  params: []`,
+    ...paramsLines(requiredParamNames).map((l) => "  " + l),
   ];
 
   const seq = findSeqIn(owner.ownerMap, listKey);

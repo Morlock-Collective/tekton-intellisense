@@ -669,6 +669,19 @@ typed in, or left unspecified entirely (Tekton's cluster resolver falls
 back to its own `default-namespace` config in that case, so omitting it
 is a legitimate choice, not an incomplete one).
 
+Follow-up from live testing of the above: `addTask` now also takes a
+`TektonWorkspaceIndex` and looks up the entered `taskRef` name through it
+(local files first, cluster-fetched resources as fallback, same as every
+other identity lookup) — if it resolves, every required (no `default`)
+param the Task declares is pre-filled into the new entry's `params:` list
+as a blank-valued binding (`- name: X\n  value: ""`), the exact shape
+`codeActions.ts`'s "add missing param" quick fix already produces, rather
+than leaving `params: []` for the user to expand by hand. Unresolvable
+names (including ones filled in before the workspace/cluster index has
+finished indexing) still fall back to the previous `params: []`, exactly
+as before this existed — nothing to pre-fill for a Task the extension
+doesn't know about.
+
 ## Notable bugs found and fixed along the way
 
 - Multi-line inserts only indented their first line correctly; the trailing

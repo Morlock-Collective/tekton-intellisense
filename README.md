@@ -104,7 +104,9 @@ of future improvement.
     to a Pipeline or a PipelineRun's inline `pipelineSpec`. Choose a local
     task (`taskRef: { name: ... }`) or a cluster-resolved one (Tekton's
     `resolver: cluster` shape, with a namespace picked from your
-    configured cluster sources or typed in).
+    configured cluster sources or typed in). If the referenced Task is
+    already known, its required params are pre-filled with blank values
+    instead of leaving `params: []`.
   - `Tekton: Add When Expression to Task` — adds a `when:` condition to a
     task entry: the one under your cursor if there is one, otherwise pick
     from a list of the Pipeline's tasks.

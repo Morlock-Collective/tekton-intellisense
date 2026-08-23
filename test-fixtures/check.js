@@ -1127,7 +1127,7 @@ console.log("\naddTask: local vs cluster-resolved taskRef (addTask.ts's taskRefL
     if (request === "vscode") return { Position, Range, Selection };
     return originalLoad.call(this, request, ...rest);
   };
-  const { taskRefLines } = require("../out/commands/addTask");
+  const { taskRefLines, paramsLines } = require("../out/commands/addTask");
   Module._load = originalLoad;
 
   const local = taskRefLines("xyz", undefined);
@@ -1189,6 +1189,60 @@ console.log("\naddTask: local vs cluster-resolved taskRef (addTask.ts's taskRefL
   if (!okSplice) {
     console.log(result);
     failures++;
+  }
+
+  const noParams = paramsLines([]);
+  const okNoParams = JSON.stringify(noParams) === JSON.stringify(["params: []"]);
+  console.log(`  [${okNoParams ? "PASS" : "FAIL"}] paramsLines([]): bare "params: []" (${JSON.stringify(noParams)})`);
+  if (!okNoParams) failures++;
+
+  const withParams = paramsLines(["image", "dockerfile"]);
+  const okWithParams =
+    JSON.stringify(withParams) ===
+    JSON.stringify(["params:", "  - name: image", '    value: ""', "  - name: dockerfile", '    value: ""']);
+  console.log(`  [${okWithParams ? "PASS" : "FAIL"}] paramsLines(["image", "dockerfile"]): one blank-valued binding per name (${JSON.stringify(withParams)})`);
+  if (!okWithParams) failures++;
+
+  // The point of the feature: adding a task whose referenced Task is known (resolvable via the
+  // workspace index) pre-fills its required (no-default) params with blank bindings, the same
+  // shape codeActions.ts's "add missing param" quick fix produces -- so the splice below mirrors
+  // exactly what addTaskCommand itself assembles, given a resolved task's symbols.
+  {
+    const resolvedTask = {
+      params: [
+        { name: "image", default: undefined },
+        { name: "dockerfile", default: "Dockerfile" },
+        { name: "build-args", default: undefined },
+      ],
+    };
+    const requiredParamNames = resolvedTask.params.filter((p) => p.default === undefined).map((p) => p.name);
+    const knownTaskItemLines = [
+      "- name: build-again",
+      ...taskRefLines("build-image", undefined).map((l) => "  " + l),
+      "  runAfter: []",
+      ...paramsLines(requiredParamNames).map((l) => "  " + l),
+    ];
+    const source2 = fs.readFileSync(path.join(__dirname, "pipeline-typo.yaml"), "utf8");
+    const { result: result2 } = simulateAddTask(source2, knownTaskItemLines);
+    let after2, okKnown;
+    try {
+      after2 = YAML.parse(result2);
+      const entry = after2.spec.tasks.find((t) => t.name === "build-again");
+      okKnown =
+        entry?.taskRef?.name === "build-image" &&
+        entry.params?.length === 2 &&
+        entry.params.every((p) => p.value === "") &&
+        entry.params.map((p) => p.name).sort().join(",") === "build-args,image";
+    } catch {
+      okKnown = false;
+    }
+    console.log(
+      `  [${okKnown ? "PASS" : "FAIL"}] known task's required params ("image", "build-args") pre-filled with blank values, "dockerfile" (has a default) skipped`
+    );
+    if (!okKnown) {
+      console.log(result2);
+      failures++;
+    }
   }
 }
 
