@@ -498,5 +498,76 @@ access, a call) rather than guessing at a type it can't know.
       "Done" below) are wired up; hover on a key showing its schema
       description is the remaining piece of the original three-part ask.
 
+### Planned: cluster-shared resources (Task/Pipeline/etc. defined outside the workspace)
+
+Referencing a Task, Pipeline, StepAction, or Trigger-family resource that
+lives in another namespace on the cluster — not in this workspace at all —
+is normal practice on Kubernetes/OpenShift (a shared "catalog" of Tasks
+synced or copied into every namespace, referenced by plain name). Right now
+the workspace index only ever knows about resources actually present as
+files, so a `taskRef` to one of these resolves to "unknown" with a
+did-you-mean suggestion — correct given what the index can see, but not
+what the user actually wants for this case.
+
+**Design**: fetch these resources via `kubectl`/`oc` (auth left entirely to
+the user's own kubeconfig/session — this extension never handles
+credentials), cache them, and feed them into the *same* lookup path
+everything already goes through (`TektonWorkspaceIndex`), so completion,
+hover, Go to Definition, and the taskRef param-wiring diagnostic all pick
+them up automatically rather than needing separate handling. A fetched
+resource is read-only from this extension's perspective — no rename, no
+edit — surfaced as a synthetic, unsaved document under a `tekton-cluster:`
+URI scheme (its own `TextDocumentContentProvider`) so "Go to Definition"
+still has somewhere real to jump to, just not a workspace file.
+
+**Settings** (`tektonIntellisense.clusterResources.*`):
+- `command` — `kubectl` or `oc`, path or bare name (default `kubectl`).
+- `sources` — array of `{ namespace, kinds[] }`, the namespace/kind matrix
+  to pull from. `kinds` is a checkbox-style enum array
+  (Task/ClusterTask/Pipeline/StepAction/TriggerTemplate/TriggerBinding/
+  ClusterTriggerBinding) — usable directly via `settings.json`, plus a
+  `Tekton: Configure Cluster Resources` command driving the same array
+  through a `showQuickPick({canPickMany: true})` checkbox flow, since VS
+  Code's native settings GUI doesn't render a real namespace × kind matrix.
+- `refreshIntervalHours` — default 24 ("generally only rechecked daily").
+  0 disables automatic refresh; `Tekton: Refresh Cluster Resources` always
+  forces one regardless.
+- `authCommand` — optional; `Tekton: Authenticate to Cluster` runs it in an
+  integrated terminal (not silently/headlessly — cluster login is commonly
+  interactive: SSO browser flow, a password prompt) so the user can log in
+  before resources will fetch successfully.
+
+**Fetching**: `execFile` (never `exec`/shell interpolation) —
+`<command> get <kind>.<apiGroup> -n <namespace> -o json` per configured
+(namespace, kind) pair, `-n` omitted for the two cluster-scoped kinds. One
+source failing (bad namespace, no RBAC, cluster unreachable) must not
+block the others; background refresh failures log to an output channel
+rather than popping a dialog, manual refresh reports success/failure
+directly.
+
+**Integration surface — deliberately narrow**:
+- `TektonWorkspaceIndex`'s lookup methods gain a cluster-index fallback: a
+  local, in-workspace declaration always wins on a name collision (no
+  surprise shadowing), `allNames()`/`lookupAllRecords` include both. Every
+  consumer (diagnostics, completion, hover, Go to Definition) goes through
+  these same methods already, so no changes needed there beyond this.
+- `TektonRenameProvider` gets exactly one new guard: reject a rename
+  outright — clear error message, not a silent no-op — whenever the
+  resolved record's `uri.scheme` is the synthetic cluster scheme, at both
+  "renaming this document directly" and "renaming a reference that
+  resolves to an external declaration."
+- Hover's identity card gets one added line when the resolved record is
+  external: which namespace it came from, and that it's read-only.
+
+**Deliberately out of scope for v1** (documented as follow-ups, not
+silently missing): recognizing Tekton's `resolver: cluster` remote-resolution
+`taskRef`/`pipelineRef` shape specifically (v1 matches plain
+`taskRef: {name: ...}` against whatever the configured sources fetched,
+regardless of resolver syntax — covers the common "synced copy in every
+namespace" pattern without needing to parse resolver params); persisting
+fetched resources across VS Code window restarts (each new window does one
+in-memory fetch at startup, then respects the interval/manual-refresh
+policy for as long as it stays open).
+
 Publishing to the VS Code Marketplace / Open VSX is being done manually by
 the maintainer once a release is judged stable — not tracked here.
