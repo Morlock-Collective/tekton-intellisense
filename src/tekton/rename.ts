@@ -17,6 +17,7 @@ import {
 import { TektonWorkspaceIndex, IndexedResource } from "./workspaceIndex";
 import { findWorkspaceDocs } from "./workspaceScan";
 import { toVscodeRange } from "./rangeUtils";
+import { isClusterResourceUri } from "./clusterIndex";
 
 const PIPELINE_KIND: ReadonlySet<TektonKind> = new Set(["Pipeline"]);
 const TEMPLATE_KIND: ReadonlySet<TektonKind> = new Set(["TriggerTemplate"]);
@@ -76,7 +77,13 @@ function resolveUnambiguous(candidates: IndexedResource[], name: string, kindLab
       `Tekton Intellisense: can't rename — "${name}" is declared by ${candidates.length} different ${kindLabel} files, so it's ambiguous which one this reference means. Rename the declaration directly, or make the name unique first.`
     );
   }
-  return candidates[0];
+  const record = candidates[0];
+  if (isClusterResourceUri(record.uri)) {
+    throw new Error(
+      `Tekton Intellisense: can't rename — "${name}" is a cluster-fetched ${kindLabel} (read-only), not a file in this workspace.`
+    );
+  }
+  return record;
 }
 
 /** A document kind that can reference an identity by name, and how to find/edit those references within one such document. */
@@ -98,6 +105,10 @@ export class TektonRenameProvider implements vscode.RenameProvider {
   constructor(private readonly workspaceIndex: TektonWorkspaceIndex) {}
 
   prepareRename(document: vscode.TextDocument, position: vscode.Position): vscode.Range {
+    if (isClusterResourceUri(document.uri)) {
+      throw new Error("Tekton Intellisense: this is a cluster-fetched resource (read-only) — edit it on the cluster instead.");
+    }
+
     const offset = document.offsetAt(position);
     const parsed = findResourceAt(parseTektonFile(document.getText()), offset);
     if (!parsed) throw new Error("Tekton Intellisense: this isn't a Tekton resource.");
@@ -113,6 +124,10 @@ export class TektonRenameProvider implements vscode.RenameProvider {
     position: vscode.Position,
     newName: string
   ): Promise<vscode.WorkspaceEdit | undefined> {
+    if (isClusterResourceUri(document.uri)) {
+      throw new Error("Tekton Intellisense: this is a cluster-fetched resource (read-only) — edit it on the cluster instead.");
+    }
+
     const offset = document.offsetAt(position);
     const parsed = findResourceAt(parseTektonFile(document.getText()), offset);
     if (!parsed) return undefined;
@@ -336,7 +351,9 @@ export class TektonRenameProvider implements vscode.RenameProvider {
       );
     }
 
-    const sameName = lookupAll(this.workspaceIndex, name);
+    // Cluster-fetched copies sharing this name aren't a second *workspace* declaration to be
+    // ambiguous about -- only local files count toward whether cross-file references get updated.
+    const sameName = lookupAll(this.workspaceIndex, name).filter((r) => !isClusterResourceUri(r.uri));
     if (sameName.length > 1) {
       void vscode.window.showWarningMessage(
         `Tekton Intellisense: "${name}" is declared by ${sameName.length} different ${fileLabel} files — only the one you renamed from was updated. Update references elsewhere by hand if needed.`
@@ -362,7 +379,9 @@ export class TektonRenameProvider implements vscode.RenameProvider {
     const taskName = taskParsed.symbols.metadataName;
     if (!taskName) return;
 
-    const sameName = this.workspaceIndex.lookupAllTaskRecords(taskName);
+    // Cluster-fetched copies sharing this name aren't a second *workspace* declaration to be
+    // ambiguous about -- only local files count here.
+    const sameName = this.workspaceIndex.lookupAllTaskRecords(taskName).filter((r) => !isClusterResourceUri(r.uri));
     if (sameName.length > 1) {
       void vscode.window.showWarningMessage(
         `Tekton Intellisense: "${taskName}" is declared by ${sameName.length} different Task files — only this file's own $(results.${resultName}...) uses were updated. Update $(tasks.*.results.${resultName}) references in Pipelines by hand if needed.`
@@ -398,7 +417,9 @@ export class TektonRenameProvider implements vscode.RenameProvider {
     const taskName = taskParsed.symbols.metadataName;
     if (!taskName) return;
 
-    const sameName = this.workspaceIndex.lookupAllTaskRecords(taskName);
+    // Cluster-fetched copies sharing this name aren't a second *workspace* declaration to be
+    // ambiguous about -- only local files count here.
+    const sameName = this.workspaceIndex.lookupAllTaskRecords(taskName).filter((r) => !isClusterResourceUri(r.uri));
     if (sameName.length > 1) {
       void vscode.window.showWarningMessage(
         `Tekton Intellisense: "${taskName}" is declared by ${sameName.length} different Task files — only this file's own param and $(params.${paramName}...) uses were updated. Update param bindings in Pipelines/TaskRuns by hand if needed.`
@@ -441,7 +462,9 @@ export class TektonRenameProvider implements vscode.RenameProvider {
     const pipelineName = pipelineParsed.symbols.metadataName;
     if (!pipelineName) return;
 
-    const sameName = this.workspaceIndex.lookupAllPipelineRecords(pipelineName);
+    // Cluster-fetched copies sharing this name aren't a second *workspace* declaration to be
+    // ambiguous about -- only local files count here.
+    const sameName = this.workspaceIndex.lookupAllPipelineRecords(pipelineName).filter((r) => !isClusterResourceUri(r.uri));
     if (sameName.length > 1) {
       void vscode.window.showWarningMessage(
         `Tekton Intellisense: "${pipelineName}" is declared by ${sameName.length} different Pipeline files — only this file's own workspace was updated. Update workspace bindings in PipelineRuns by hand if needed.`

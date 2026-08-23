@@ -18,6 +18,12 @@ import { addConditionalCommand } from "./commands/addConditional";
 import { addParameterCommand } from "./commands/addParameter";
 import { disposeEditTaskScript, editTaskScriptCommand, registerScriptWriteback } from "./commands/editTaskScript";
 import { CelSemanticTokensProvider, celSemanticTokensLegend } from "./tekton/celSemanticTokens";
+import { ClusterResourceIndex } from "./tekton/clusterIndex";
+import {
+  authenticateClusterCommand,
+  configureClusterResourcesCommand,
+  refreshClusterResourcesCommand,
+} from "./commands/clusterResourceCommands";
 
 const YAML_LIKE = /\.(ya?ml)$/i;
 
@@ -118,7 +124,9 @@ export function activate(context: vscode.ExtensionContext): void {
   schemasDir = path.join(context.extensionPath, "schemas");
   statusBar = new TektonStatusBar();
   const workspaceIndex = new TektonWorkspaceIndex();
-  context.subscriptions.push(diagnosticCollection, statusBar, workspaceIndex);
+  const clusterIndex = new ClusterResourceIndex();
+  workspaceIndex.setClusterIndex(clusterIndex);
+  context.subscriptions.push(diagnosticCollection, statusBar, workspaceIndex, clusterIndex);
 
   context.subscriptions.push(vscode.commands.registerCommand("tekton-intellisense.smartEnter", smartEnterCommand));
 
@@ -240,7 +248,10 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("tekton-intellisense.addTask", addTaskCommand),
     vscode.commands.registerCommand("tekton-intellisense.addConditional", addConditionalCommand),
     vscode.commands.registerCommand("tekton-intellisense.addParameter", addParameterCommand),
-    vscode.commands.registerCommand("tekton-intellisense.editTaskScript", editTaskScriptCommand)
+    vscode.commands.registerCommand("tekton-intellisense.editTaskScript", editTaskScriptCommand),
+    vscode.commands.registerCommand("tekton-intellisense.refreshClusterResources", () => refreshClusterResourcesCommand(clusterIndex)),
+    vscode.commands.registerCommand("tekton-intellisense.configureClusterResources", configureClusterResourcesCommand),
+    vscode.commands.registerCommand("tekton-intellisense.authenticateCluster", authenticateClusterCommand)
   );
 
   registerScriptWriteback(context);

@@ -36,6 +36,13 @@ export function isClusterResourceUri(uri: vscode.Uri): boolean {
   return uri.scheme === CLUSTER_URI_SCHEME;
 }
 
+/** The namespace segment of a cluster resource's synthetic URI (see {@link clusterResourceUri}), or undefined for a cluster-scoped kind's `_cluster` placeholder / a non-cluster URI -- what `hover.ts` shows to make clear a resolved identity came from outside the workspace. */
+export function clusterResourceNamespace(uri: vscode.Uri): string | undefined {
+  if (!isClusterResourceUri(uri)) return undefined;
+  const segment = uri.path.split("/")[1];
+  return segment && segment !== "_cluster" ? segment : undefined;
+}
+
 /** Serves each cached resource's YAML back to VS Code when something (Go to Definition, hover's "peek") opens its synthetic URI. */
 export class ClusterResourceContentProvider implements vscode.TextDocumentContentProvider {
   private readonly texts = new Map<string, string>();

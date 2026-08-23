@@ -4,6 +4,7 @@ import { paramRefsIn } from "./paramRefs";
 import { resolveRenameTarget, resolveIdentityRecord } from "./renameTarget";
 import { CONTEXT_TREE, CONTEXT_GROUP_DESCRIPTIONS } from "./contextVariables";
 import { TektonWorkspaceIndex, IndexedResource } from "./workspaceIndex";
+import { isClusterResourceUri, clusterResourceNamespace } from "./clusterIndex";
 
 function md(text: string): vscode.MarkdownString {
   return new vscode.MarkdownString(text);
@@ -83,6 +84,10 @@ function taskParamHover(paramName: string, taskRefName: string, workspaceIndex: 
 function identityHover(kindLabel: string, record: IndexedResource): vscode.MarkdownString {
   const symbols = record.parsed.symbols;
   const lines = [`**${symbols.metadataName}** — ${kindLabel}`];
+  if (isClusterResourceUri(record.uri)) {
+    const namespace = clusterResourceNamespace(record.uri);
+    lines.push("", `_Cluster-fetched${namespace ? ` from namespace \`${namespace}\`` : ""} — read-only, not renameable._`);
+  }
   if (symbols.params.length) lines.push("", `Params: ${symbols.params.map((p) => `\`${p.name}\``).join(", ")}`);
   if (symbols.bindingParams.length) lines.push("", `Provides: ${symbols.bindingParams.map((p) => `\`${p.name}\``).join(", ")}`);
   return md(lines.join("\n"));

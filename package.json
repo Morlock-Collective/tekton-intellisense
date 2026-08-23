@@ -66,6 +66,18 @@
       {
         "command": "tekton-intellisense.editTaskScript",
         "title": "Tekton: Edit Task Script"
+      },
+      {
+        "command": "tekton-intellisense.refreshClusterResources",
+        "title": "Tekton: Refresh Cluster Resources"
+      },
+      {
+        "command": "tekton-intellisense.configureClusterResources",
+        "title": "Tekton: Configure Cluster Resources"
+      },
+      {
+        "command": "tekton-intellisense.authenticateCluster",
+        "title": "Tekton: Authenticate to Cluster"
       }
     ],
     "keybindings": [
@@ -121,6 +133,56 @@
           "type": "boolean",
           "default": true,
           "description": "Validate documents structurally (unknown/missing keys, wrong types) against Tekton's own schemas."
+        },
+        "tektonIntellisense.clusterResources.command": {
+          "type": "string",
+          "default": "kubectl",
+          "description": "Path or command name for the client used to fetch shared cluster resources -- kubectl, oc, or a full path to either."
+        },
+        "tektonIntellisense.clusterResources.authCommand": {
+          "type": "string",
+          "default": "",
+          "description": "Optional command to authenticate to the cluster (e.g. \"oc login ...\"). Run on demand via \"Tekton: Authenticate to Cluster\", in a terminal -- never run automatically, since login is commonly interactive (SSO, a password prompt)."
+        },
+        "tektonIntellisense.clusterResources.refreshIntervalHours": {
+          "type": "number",
+          "default": 24,
+          "description": "How often shared cluster resources are automatically re-fetched while a window stays open. 0 disables automatic refresh -- use \"Tekton: Refresh Cluster Resources\" manually instead."
+        },
+        "tektonIntellisense.clusterResources.sources": {
+          "type": "array",
+          "default": [],
+          "description": "Namespaces to pull shared Tekton resources from, and which kinds to include from each. Easier to edit via \"Tekton: Configure Cluster Resources\" than by hand here.",
+          "items": {
+            "type": "object",
+            "required": [
+              "namespace",
+              "kinds"
+            ],
+            "properties": {
+              "namespace": {
+                "type": "string",
+                "description": "Kubernetes namespace to fetch from (ignored for the two cluster-scoped kinds, ClusterTask and ClusterTriggerBinding)."
+              },
+              "kinds": {
+                "type": "array",
+                "description": "Which resource kinds to fetch from this namespace.",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "Task",
+                    "ClusterTask",
+                    "Pipeline",
+                    "StepAction",
+                    "TriggerTemplate",
+                    "TriggerBinding",
+                    "ClusterTriggerBinding"
+                  ]
+                },
+                "uniqueItems": true
+              }
+            }
+          }
         }
       }
     }
