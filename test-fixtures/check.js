@@ -1758,6 +1758,126 @@ spec:
   if (!okRun) failures++;
 }
 
+// A taskRef/pipelineRef can also be written using Tekton's "cluster" remote-resolver shape
+// (resolver: cluster, params: [{name: kind/name/namespace, value: ...}]) instead of a plain
+// {name: ...} -- this used to resolve to nothing at all (taskRefName stayed undefined), so every
+// downstream check silently skipped it: no unknown-ref warning, no missing-required-param
+// warning, nothing. https://tekton.dev/docs/pipelines/cluster-resolver/
+console.log("\ntaskRef/pipelineRef using the cluster resolver shape (resolver: cluster):");
+{
+  const clusterResolverPipeline = parseTektonDocument(`apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: my-pipeline
+spec:
+  params:
+    - name: some-param
+      default: whatever
+  tasks:
+    - name: some-task
+      taskRef:
+        resolver: cluster
+        params:
+          - name: kind
+            value: task
+          - name: name
+            value: build-image
+          - name: namespace
+            value: my-namespace
+      params:
+        - name: cluster
+          value: whatever
+`);
+  const task = clusterResolverPipeline.symbols.tasks[0];
+  const okResolved = task.taskRefName === "build-image";
+  const okRangePointsAtName =
+    okResolved && clusterResolverPipeline.text.slice(...task.taskRefNameRange) === "build-image";
+  console.log(
+    `  [${okResolved && okRangePointsAtName ? "PASS" : "FAIL"}] taskRefName resolved from the resolver's "name" param ("${task.taskRefName}"), range points at its value`
+  );
+  if (!okResolved || !okRangePointsAtName) {
+    console.log({ task });
+    failures++;
+  }
+
+  // Same param-wiring logic diagnostics.ts's checkTaskParamBindings/checkTaskParamWiring use,
+  // against the real build-image task fixture (required "image" param, no default).
+  const buildImage = parseTektonDocument(
+    fs.readFileSync(path.join(__dirname, "test-tasks", "task-build-image.yaml"), "utf8")
+  );
+  const providedNames = new Set(task.paramBindings.map((p) => p.name));
+  const missingRequired = buildImage.symbols.params.filter((p) => p.default === undefined && !providedNames.has(p.name));
+  const declaredNames = buildImage.symbols.params.map((p) => p.name);
+  const unknownProvided = task.paramBindings.filter((pb) => !declaredNames.includes(pb.name));
+
+  const okMissing = JSON.stringify(missingRequired.map((p) => p.name)) === JSON.stringify(["image"]);
+  console.log(`  [${okMissing ? "PASS" : "FAIL"}] resolved task's required "image" param (no default) flagged as missing (${JSON.stringify(missingRequired.map((p) => p.name))})`);
+  if (!okMissing) failures++;
+
+  const okUnknown = unknownProvided.length === 1 && unknownProvided[0].name === "cluster";
+  console.log(`  [${okUnknown ? "PASS" : "FAIL"}] task entry's own "cluster" param binding flagged as unknown for build-image (${JSON.stringify(unknownProvided.map((p) => p.name))})`);
+  if (!okUnknown) failures++;
+
+  // A resolver type other than "cluster" (git/bundles/hub/...) has a completely different,
+  // unrelated param shape -- must not be misread as kind/name/namespace.
+  const gitResolverPipeline = parseTektonDocument(`apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: my-pipeline
+spec:
+  tasks:
+    - name: some-task
+      taskRef:
+        resolver: git
+        params:
+          - name: url
+            value: https://github.com/example/repo
+          - name: pathInRepo
+            value: task.yaml
+`);
+  const gitTask = gitResolverPipeline.symbols.tasks[0];
+  const okGitIgnored = gitTask.taskRefName === undefined;
+  console.log(`  [${okGitIgnored ? "PASS" : "FAIL"}] a non-cluster resolver (git) is left alone, not misread as kind/name/namespace (taskRefName=${JSON.stringify(gitTask.taskRefName)})`);
+  if (!okGitIgnored) failures++;
+
+  // A plain taskRef.name still takes priority over any resolver shape it might also carry --
+  // this shouldn't ever happen in a real pipeline, but the plain form winning is the more
+  // conservative choice if it somehow did.
+  const plainStillWorks = parseTektonDocument(`apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: my-pipeline
+spec:
+  tasks:
+    - name: some-task
+      taskRef:
+        name: plain-name
+`);
+  const okPlain = plainStillWorks.symbols.tasks[0].taskRefName === "plain-name";
+  console.log(`  [${okPlain ? "PASS" : "FAIL"}] a plain taskRef.name (no resolver at all) still resolves as before`);
+  if (!okPlain) failures++;
+
+  // pipelineRef (a PipelineRun's own) supports the same resolver shape.
+  const clusterResolverRun = parseTektonDocument(`apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  name: my-run
+spec:
+  pipelineRef:
+    resolver: cluster
+    params:
+      - name: kind
+        value: pipeline
+      - name: name
+        value: build-and-test
+      - name: namespace
+        value: my-namespace
+`);
+  const okPipelineRun = clusterResolverRun.symbols.pipelineRefName === "build-and-test";
+  console.log(`  [${okPipelineRun ? "PASS" : "FAIL"}] PipelineRun's own pipelineRef resolves the same way ("${clusterResolverRun.symbols.pipelineRefName}")`);
+  if (!okPipelineRun) failures++;
+}
+
 // Mirrors checkTriggerTemplateParamWiring in diagnostics.ts (same vscode-free
 // constraint as the ref-validation block above) -- builds the same "does the
 // bound TriggerBinding set actually cover every required param" check

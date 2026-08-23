@@ -208,6 +208,55 @@ function refNameAndRange(map: YAMLMap | undefined, key: string): { name?: string
   return { name: scalarString(nameNode), range: scalarRange(nameNode) };
 }
 
+/**
+ * The `cluster` remote-resolver's `kind`/`name`/`namespace` param triple
+ * (https://tekton.dev/docs/pipelines/cluster-resolver/), extracted from
+ * `resolverMap`'s `params: [{name, value}]` list. Only meaningful when
+ * `resolverMap`'s own `resolver:` is specifically `cluster` — every other
+ * resolver type (`git`/`bundles`/`hub`/...) has an entirely different,
+ * unrelated param shape, so callers must check that themselves before
+ * using this.
+ */
+function clusterResolverParams(resolverMap: YAMLMap): { kind?: string; name?: string; nameRange?: [number, number]; namespace?: string } {
+  const out: { kind?: string; name?: string; nameRange?: [number, number]; namespace?: string } = {};
+  for (const item of seqOf(resolverMap.get("params", true))?.items ?? []) {
+    const m = mapOf(item);
+    if (!m) continue;
+    const paramName = scalarString(m.get("name", true));
+    const valueNode = m.get("value", true);
+    if (paramName === "kind") out.kind = scalarString(valueNode);
+    else if (paramName === "name") {
+      out.name = scalarString(valueNode);
+      out.nameRange = scalarRange(valueNode);
+    } else if (paramName === "namespace") out.namespace = scalarString(valueNode);
+  }
+  return out;
+}
+
+/**
+ * Like {@link refNameAndRange}, for `taskRef`/`pipelineRef` specifically —
+ * falls back to the `cluster` remote-resolver shape
+ * (`{ resolver: cluster, params: [{name: kind/name/namespace, value: ...}] }`)
+ * when there's no plain `name`, so a Pipeline task entry (or a
+ * TaskRun's/PipelineRun's own ref) written this way resolves against
+ * cluster-fetched resources — completion, hover, the unknown-ref and
+ * param-wiring diagnostics — exactly like a plain `taskRef: {name: ...}`
+ * does, with no separate logic needed anywhere downstream. Any other
+ * resolver type is deliberately left alone (name/range both undefined)
+ * rather than guessed at, same reasoning as {@link clusterResolverParams}.
+ */
+function taskOrPipelineRefNameAndRange(map: YAMLMap | undefined, key: string): { name?: string; range?: [number, number] } {
+  const ref = mapOf(map?.get(key, true));
+  const direct = refNameAndRange(map, key);
+  if (direct.name) return direct;
+
+  if (ref && scalarString(ref.get("resolver", true)) === "cluster") {
+    const { name, nameRange } = clusterResolverParams(ref);
+    if (name) return { name, range: nameRange };
+  }
+  return direct;
+}
+
 /** Reads a `<key>: { ref: <name> }` field (an EventListener/Trigger's `template`), where `ref` is a bare scalar rather than nested under `.name`. */
 function scalarRefField(map: YAMLMap | undefined, key: string): { name?: string; range?: [number, number] } {
   const sub = mapOf(map?.get(key, true));
@@ -331,7 +380,7 @@ function taskParamBindings(seq: YAMLSeq | undefined): RefName[] {
 function taskEntries(seq: YAMLSeq | undefined): TaskSymbol[] {
   const out: TaskSymbol[] = [];
   forEachNamedItem(seq, (m, name, range) => {
-    const taskRef = refNameAndRange(m, "taskRef");
+    const taskRef = taskOrPipelineRefNameAndRange(m, "taskRef");
     const workspaceBindings = taskWorkspaceBindings(seqOf(m.get("workspaces", true)));
     const runAfter = scalarNameList(seqOf(m.get("runAfter", true)));
     const paramBindings = taskParamBindings(seqOf(m.get("params", true)));
@@ -493,8 +542,8 @@ function extractSymbols(doc: Document.Parsed): TektonSymbols | undefined {
 
   const spec = mapOf(root.get("spec", true));
 
-  const pipelineRef = kind === "PipelineRun" ? refNameAndRange(spec, "pipelineRef") : undefined;
-  const ownTaskRef = kind === "TaskRun" ? refNameAndRange(spec, "taskRef") : undefined;
+  const pipelineRef = kind === "PipelineRun" ? taskOrPipelineRefNameAndRange(spec, "pipelineRef") : undefined;
+  const ownTaskRef = kind === "TaskRun" ? taskOrPipelineRefNameAndRange(spec, "taskRef") : undefined;
   const ownTemplateRef = kind === "Trigger" ? scalarRefField(spec, "template") : undefined;
   const ownBindingsSeq = kind === "Trigger" ? seqOf(spec?.get("bindings", true)) : undefined;
   const ownBindingRefs = kind === "Trigger" ? scalarRefList(ownBindingsSeq) : [];
