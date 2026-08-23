@@ -5,7 +5,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
-- Cluster-shared resources: reference a Task/Pipeline/etc. defined only on the cluster (`tektonIntellisense.clusterResources.*` settings, `Tekton: Configure/Refresh Cluster Resources`, `Tekton: Authenticate to Cluster`) — resolves for completion/hover/Go to Definition, read-only
+- Cluster-shared resources: reference a Task/Pipeline/etc. defined only on the cluster (`tektonIntellisense.clusterResources.*` settings, `Tekton: Configure/Refresh Cluster Resources`, `Tekton: Authenticate to Cluster`) — resolves for completion/hover/Go to Definition/diagnostics, read-only; a refresh triggered by a settings change reports success/failure visibly rather than only logging it
+- Unknown `taskRef`/`pipelineRef` names are now flagged with a "did you mean" suggestion, matching the check Trigger-family refs already had
 
 ## [0.8.0] - 2026-08-20
 

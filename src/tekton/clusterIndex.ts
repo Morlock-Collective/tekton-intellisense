@@ -116,9 +116,13 @@ export class ClusterResourceIndex implements vscode.Disposable {
       this.outputChannel,
       this.changeEmitter,
       vscode.workspace.onDidChangeConfiguration((e) => {
+        // Treated as `manual` (a visible success/failure message, not just an output-channel log
+        // line) since the user just deliberately changed this setting -- via "Configure Cluster
+        // Resources" or by hand in settings.json -- and silently failing here (a bad namespace, no
+        // RBAC, kubectl not on PATH) would otherwise look exactly like "nothing happened."
         if (e.affectsConfiguration("tektonIntellisense.clusterResources")) {
           this.rescheduleTimer();
-          void this.refresh(false);
+          void this.refresh(true);
         }
       })
     );

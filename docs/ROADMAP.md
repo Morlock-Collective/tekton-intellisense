@@ -443,10 +443,19 @@ Fetching is `execFile` only, never `exec`/shell interpolation, so nothing
 here is exposed to shell-injection risk regardless of what a namespace
 name or configured command path contains. One source failing (bad
 namespace, no RBAC, cluster unreachable) doesn't block the others — each
-is fetched independently, a background refresh's errors go to an output
-channel rather than an unprompted popup, a manual refresh reports
-success/failure directly. Authentication itself is left entirely to the
-user's own kubeconfig/session; this extension never touches credentials.
+is fetched independently, a background (interval-timer) refresh's errors
+go to an output channel rather than an unprompted popup, while a manual
+refresh — and a refresh triggered by changing the `clusterResources`
+settings themselves, whether through `Tekton: Configure Cluster
+Resources` or by hand in `settings.json` — reports success/failure
+visibly. The two were originally treated the same (silent), which meant
+configuring a source with a typo'd namespace, wrong RBAC, or no
+`kubectl` on `PATH` looked identical to it working — nothing in the UI
+said otherwise; fixed by treating "the user just changed this setting"
+the same as an explicit manual refresh, since both are deliberate
+actions that deserve a visible outcome. Authentication itself is left
+entirely to the user's own kubeconfig/session; this extension never
+touches credentials.
 
 A fetched resource has no real workspace file, but Go to Definition still
 needs somewhere to jump to — each gets a synthetic, read-only
@@ -473,6 +482,22 @@ coincidental name collision with a cluster resource doesn't wrongly block
 an otherwise-unambiguous same-workspace rename. Hover's identity card
 gains one line for a cluster-fetched result: which namespace it came
 from, and that it's read-only.
+
+**Unknown taskRef/pipelineRef validation** (`diagnostics.ts`) — a Pipeline
+task entry's (or TaskRun's own) `taskRef`, and a PipelineRun's own
+`pipelineRef`, are now flagged with a "did you mean" suggestion when the
+name doesn't resolve to anything, the same check `checkTriggerRefs`
+already did for TriggerBinding/TriggerTemplate/Trigger refs. Found while
+testing cluster-shared resources (above) — surfaced by that work, but not
+actually specific to it: it turned out there had never been a check here
+at all, for purely local, no-cluster-involved workspaces either. Two
+other checks' doc comments referenced this ("an unresolved taskRef isn't
+flagged by any check today") as their reason for silently skipping an
+unresolved taskRef rather than guessing at its params — both updated to
+point at the new check instead, now that the gap they were describing is
+closed. Extracted the shared "does this identity resolve, and if not
+what's the closest match" logic into one `flagUnknownIdentityRef` helper
+used by both checks, rather than duplicating it a second time.
 
 ## Notable bugs found and fixed along the way
 

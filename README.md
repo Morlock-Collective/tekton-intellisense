@@ -20,7 +20,10 @@ of future improvement.
   document's declared `spec.params`, `spec.workspaces`, `spec.results`, and
   (for Pipelines) `spec.tasks`/`spec.finally` names. Unknown or misspelled
   names get a warning with a "did you mean" suggestion (Levenshtein
-  distance) and a quick fix to apply it.
+  distance) and a quick fix to apply it. A Pipeline task entry's (or
+  TaskRun's/PipelineRun's own) `taskRef`/`pipelineRef` gets the same
+  treatment against every Task/Pipeline the workspace (and, if configured,
+  the cluster — see below) actually knows about.
 - **Duplicate-name validation** — duplicated `name` fields in `params`, `workspaces` or `results`, as well as `tasks` and `finally` lists, are checked against.
 - **Task-level workspace binding validation** — Works the same way as parameter validation.
 - **Schema validation** — unknown/missing keys and wrong types or enum values are checked against
@@ -48,9 +51,10 @@ of future improvement.
 - **Cluster-shared resources** — a Task/Pipeline/etc. referenced by name but
   defined only on the cluster (a shared catalog namespace, the common
   Kubernetes/OpenShift pattern) resolves via `kubectl`/`oc` for completion,
-  hover, and Go to Definition, once configured under
-  `tektonIntellisense.clusterResources` (or via `Tekton: Configure Cluster
-  Resources`). Read-only — no rename, no edit.
+  hover, Go to Definition, and diagnostics (unknown name, missing required
+  params) alike, once configured under `tektonIntellisense.clusterResources`
+  (or via `Tekton: Configure Cluster Resources`). Read-only — no rename, no
+  edit.
 - **Context-aware completion** — typing `$(params.` (or `workspaces.`,
   `results.`, `tasks.`, `context.`) suggests what's valid there:
   declared names for the current document, filtered by resource kind, narrowing to leaf

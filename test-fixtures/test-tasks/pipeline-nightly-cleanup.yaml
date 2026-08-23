@@ -1,0 +1,26 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: nightly-cleanup
+spec:
+  description: Scheduled housekeeping -- prunes old build artifacts and reports to Slack.
+  params:
+    - name: retain-days
+      type: string
+      description: Artifacts older than this many days are removed.
+      default: "14"
+  tasks:
+    - name: cleanup
+      taskRef:
+        name: cleanup
+      params:
+        - name: retain-days
+          value: $(params.retain-days)
+    - name: notify
+      taskRef:
+        name: notify-slack
+      runAfter:
+        - cleanup
+      params:
+        - name: message
+          value: "Nightly cleanup complete (retained $(params.retain-days) days)."

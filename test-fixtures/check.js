@@ -1656,6 +1656,108 @@ console.log("\nEventListener/Trigger ref validation (simulated workspace index):
   }
 }
 
+// Mirrors checkTaskAndPipelineRefs in diagnostics.ts (same vscode-free
+// constraint as the trigger-ref-validation block above) -- previously there
+// was no check at all for an unresolved taskRef/pipelineRef (only completion
+// and the separately-gated param-wiring checks touched them), so this covers
+// the gap directly: a typo'd taskRef.name or pipelineRef.name should be
+// flagged with a "did you mean" suggestion, the same as trigger-family refs
+// already are.
+console.log("\nTask/Pipeline ref validation (simulated workspace index):");
+{
+  const taskNames = ["git-clone", "build-image"];
+  const pipelineNames = ["build-and-test"];
+
+  function unresolvedRefs(parsed) {
+    const unknown = [];
+    for (const task of parsed.symbols.tasks) {
+      if (task.taskRefName && !taskNames.includes(task.taskRefName)) {
+        unknown.push({ label: "Task", name: task.taskRefName, suggestion: closestMatch(task.taskRefName, taskNames) });
+      }
+    }
+    if (parsed.symbols.kind === "TaskRun" && parsed.symbols.taskRefName && !taskNames.includes(parsed.symbols.taskRefName)) {
+      unknown.push({ label: "Task", name: parsed.symbols.taskRefName, suggestion: closestMatch(parsed.symbols.taskRefName, taskNames) });
+    }
+    if (
+      parsed.symbols.kind === "PipelineRun" &&
+      parsed.symbols.pipelineRefName &&
+      !pipelineNames.includes(parsed.symbols.pipelineRefName)
+    ) {
+      unknown.push({ label: "Pipeline", name: parsed.symbols.pipelineRefName, suggestion: closestMatch(parsed.symbols.pipelineRefName, pipelineNames) });
+    }
+    return unknown;
+  }
+
+  const validPipeline = parseTektonDocument(`apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: uses-known-tasks
+spec:
+  tasks:
+    - name: clone
+      taskRef:
+        name: git-clone
+    - name: build
+      taskRef:
+        name: build-image
+      runAfter:
+        - clone
+`);
+  const okValid = unresolvedRefs(validPipeline).length === 0;
+  console.log(`  [${okValid ? "PASS" : "FAIL"}] Pipeline referencing known Tasks: no unresolved refs`);
+  if (!okValid) {
+    console.log(unresolvedRefs(validPipeline));
+    failures++;
+  }
+
+  const typoPipeline = parseTektonDocument(`apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: uses-typoed-task
+spec:
+  tasks:
+    - name: clone
+      taskRef:
+        name: git-clonne
+`);
+  const typoResult = unresolvedRefs(typoPipeline);
+  const okTypo = typoResult.length === 1 && typoResult[0].label === "Task" && typoResult[0].name === "git-clonne" && typoResult[0].suggestion === "git-clone";
+  console.log(`  [${okTypo ? "PASS" : "FAIL"}] Pipeline task entry taskRef "git-clonne" flagged, suggests "git-clone" (${JSON.stringify(typoResult)})`);
+  if (!okTypo) failures++;
+
+  // Inline taskSpec: no taskRef.name to check at all -- correctly not flagged, not skipped by
+  // coincidence.
+  const inlineSpecPipeline = parseTektonDocument(`apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: uses-inline-taskspec
+spec:
+  tasks:
+    - name: inline
+      taskSpec:
+        steps:
+          - name: run
+            image: alpine
+            script: echo hi
+`);
+  const okInlineSpec = unresolvedRefs(inlineSpecPipeline).length === 0;
+  console.log(`  [${okInlineSpec ? "PASS" : "FAIL"}] Pipeline task entry using inline taskSpec (no taskRef): not flagged`);
+  if (!okInlineSpec) failures++;
+
+  const typoPipelineRun = parseTektonDocument(`apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  name: run-it
+spec:
+  pipelineRef:
+    name: build-and-tset
+`);
+  const runResult = unresolvedRefs(typoPipelineRun);
+  const okRun = runResult.length === 1 && runResult[0].label === "Pipeline" && runResult[0].name === "build-and-tset" && runResult[0].suggestion === "build-and-test";
+  console.log(`  [${okRun ? "PASS" : "FAIL"}] PipelineRun pipelineRef "build-and-tset" flagged, suggests "build-and-test" (${JSON.stringify(runResult)})`);
+  if (!okRun) failures++;
+}
+
 // Mirrors checkTriggerTemplateParamWiring in diagnostics.ts (same vscode-free
 // constraint as the ref-validation block above) -- builds the same "does the
 // bound TriggerBinding set actually cover every required param" check

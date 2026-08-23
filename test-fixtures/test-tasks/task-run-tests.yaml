@@ -1,0 +1,39 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: run-tests
+spec:
+  description: Runs the project's test suite.
+  params:
+    - name: test-command
+      type: string
+      description: Shell command used to run the test suite.
+      default: make test
+    - name: test-args
+      type: array
+      description: Extra arguments passed to the test command.
+      default: []
+  workspaces:
+    - name: source
+      description: Source checked out by git-clone.
+  results:
+    - name: tests-passed
+      description: '"true" or "false".'
+  steps:
+    - name: test
+      image: alpine
+      # A whole-array param reference ($(params.name[*])) is only valid as a standalone list item
+      # (like here, in args:) -- Tekton's admission webhook rejects it if interpolated inline
+      # inside a script string instead. args become the script's own positional parameters.
+      args:
+        - $(params.test-args[*])
+      script: |
+        #!/usr/bin/env sh
+        set -e
+        cd "$(workspaces.source.path)"
+        if $(params.test-command) "$@"; then
+          echo -n true > "$(results.tests-passed.path)"
+        else
+          echo -n false > "$(results.tests-passed.path)"
+          exit 1
+        fi

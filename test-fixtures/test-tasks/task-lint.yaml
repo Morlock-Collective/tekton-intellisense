@@ -1,0 +1,22 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: lint
+spec:
+  description: Runs a configurable lint command against checked-out source.
+  params:
+    - name: lint-command
+      type: string
+      description: Shell command used to lint the source.
+      default: make lint
+  workspaces:
+    - name: source
+      description: Source checked out by git-clone.
+  steps:
+    - name: lint
+      image: alpine
+      script: |
+        #!/usr/bin/env sh
+        set -e
+        cd "$(workspaces.source.path)"
+        $(params.lint-command)

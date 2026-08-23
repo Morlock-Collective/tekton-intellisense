@@ -1,0 +1,72 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: build-and-test
+spec:
+  description: Clones, lints, tests, and builds an image, notifying Slack on completion.
+  params:
+    - name: repo-url
+      type: string
+      description: Repository URL to build.
+    - name: revision
+      type: string
+      description: Git revision to build.
+      default: main
+    - name: image
+      type: string
+      description: Fully-qualified image reference to build and push.
+  workspaces:
+    - name: shared-workspace
+      description: Shared source checkout used by every task.
+  tasks:
+    - name: clone
+      taskRef:
+        name: git-clone
+      params:
+        - name: url
+          value: $(params.repo-url)
+        - name: revision
+          value: $(params.revision)
+      workspaces:
+        - name: output
+          workspace: shared-workspace
+    - name: lint
+      taskRef:
+        name: lint
+      runAfter:
+        - clone
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+    - name: test
+      taskRef:
+        name: run-tests
+      runAfter:
+        - clone
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+    - name: build
+      taskRef:
+        name: build-image
+      runAfter:
+        - lint
+        - test
+      params:
+        - name: image
+          value: $(params.image)
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+    - name: notify
+      taskRef:
+        name: notify-slack
+      runAfter:
+        - build
+      params:
+        - name: message
+          value: "Build $(tasks.build.results.image-digest) completed for $(params.repo-url)@$(tasks.clone.results.commit-sha)"
+  finally:
+    - name: cleanup
+      taskRef:
+        name: cleanup

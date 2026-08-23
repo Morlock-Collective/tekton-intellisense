@@ -1,0 +1,32 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: build-image
+spec:
+  description: Builds and pushes a container image from the checked-out source.
+  params:
+    - name: image
+      type: string
+      description: Fully-qualified image reference to build and push.
+    - name: dockerfile
+      type: string
+      description: Path to the Dockerfile, relative to the source root.
+      default: Dockerfile
+    - name: build-args
+      type: array
+      description: Extra --build-arg values.
+      default: []
+  workspaces:
+    - name: source
+      description: Source checked out by git-clone.
+  results:
+    - name: image-digest
+      description: Digest of the pushed image.
+  steps:
+    - name: build-and-push
+      image: gcr.io/kaniko-project/executor:latest
+      script: |
+        #!/busybox/sh
+        set -e
+        echo "building $(params.image) from $(params.dockerfile)"
+        echo -n "sha256:0000000000000000000000000000000000000000000000000000000000000" > "$(results.image-digest.path)"

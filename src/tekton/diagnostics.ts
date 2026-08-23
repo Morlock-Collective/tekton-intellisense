@@ -105,9 +105,10 @@ function checkTaskWorkspaceBindings(document: vscode.TextDocument, symbols: Tekt
  * Flags a `params: [{name, value}]` binding — a Pipeline task entry's own
  * (scoped to that entry) or a TaskRun's own top-level one — whose `name`
  * doesn't match any param the referenced Task/ClusterTask actually
- * declares. Only checked once the taskRef itself resolves — an unresolved
- * taskRef isn't flagged by any check today, so guessing at its params here
- * too would just be noise on top of a problem this can't itself describe.
+ * declares. Only checked once the taskRef itself resolves —
+ * {@link checkTaskAndPipelineRefs} already flags an unresolved taskRef
+ * separately, and computing a "declares no such param" list against
+ * content we don't actually have would just be noise on top of it.
  */
 function checkTaskParamBindings(document: vscode.TextDocument, symbols: TektonSymbols, workspaceIndex: TektonWorkspaceIndex): vscode.Diagnostic[] {
   const diagnostics: vscode.Diagnostic[] = [];
@@ -157,9 +158,9 @@ function checkTaskParamBindings(document: vscode.TextDocument, symbols: TektonSy
  * {@link checkTriggerTemplateParamWiring}'s shape one level down.
  *
  * Skipped entirely (rather than guessed at) when the taskRef doesn't
- * resolve at all — no check today flags an unresolved taskRef, so
- * computing a "missing params" list against content we don't actually
- * have would just be noise on top of it. Also a no-op for a Pipeline task
+ * resolve at all — {@link checkTaskAndPipelineRefs} already flags that
+ * separately, and computing a "missing params" list against content we
+ * don't actually have would just be noise on top of it. Also a no-op for a Pipeline task
  * entry using an inline `taskSpec` instead of `taskRef` — its params bind
  * to its own same-document declaration, a different case with its own
  * required/provided set that doesn't need cross-file resolution.
@@ -236,29 +237,37 @@ function checkMissingRunAfter(document: vscode.TextDocument, parsed: ParsedTekto
  * cross-file via the workspace index instead of this document's own
  * declarations.
  */
+/**
+ * Flags a cross-file identity reference (taskRef/pipelineRef/template.ref/
+ * bindings[].ref/triggerRef) that doesn't resolve to anything the
+ * workspace index can see — local files and, since `TektonWorkspaceIndex`
+ * transparently falls back to cluster-fetched resources, those too — with
+ * a "did you mean" suggestion when one's a close match. Shared by
+ * {@link checkTriggerRefs} and {@link checkTaskAndPipelineRefs}.
+ */
+function flagUnknownIdentityRef(
+  document: vscode.TextDocument,
+  diagnostics: vscode.Diagnostic[],
+  range: [number, number] | undefined,
+  name: string | undefined,
+  label: string,
+  lookupAll: (name: string) => unknown[],
+  allNames: () => string[]
+): void {
+  if (!name || !range || lookupAll(name).length > 0) return;
+  const suggestion = closestMatch(name, allNames());
+  const diagnostic = new vscode.Diagnostic(
+    new vscode.Range(offsetToPosition(document, range[0]), offsetToPosition(document, range[1])),
+    suggestion ? `Unknown ${label} "${name}". Did you mean "${suggestion}"?` : `Unknown ${label} "${name}" — no such resource found.`,
+    vscode.DiagnosticSeverity.Warning
+  );
+  diagnostic.source = DIAGNOSTIC_SOURCE;
+  if (suggestion) diagnostic.code = `suggest:${suggestion}`;
+  diagnostics.push(diagnostic);
+}
+
 function checkTriggerRefs(document: vscode.TextDocument, symbols: TektonSymbols, workspaceIndex: TektonWorkspaceIndex): vscode.Diagnostic[] {
   const diagnostics: vscode.Diagnostic[] = [];
-
-  const flagUnknown = (
-    range: [number, number] | undefined,
-    name: string | undefined,
-    label: string,
-    lookupAll: (name: string) => unknown[],
-    allNames: () => string[]
-  ) => {
-    if (!name || !range || lookupAll(name).length > 0) return;
-    const suggestion = closestMatch(name, allNames());
-    const diagnostic = new vscode.Diagnostic(
-      new vscode.Range(offsetToPosition(document, range[0]), offsetToPosition(document, range[1])),
-      suggestion
-        ? `Unknown ${label} "${name}". Did you mean "${suggestion}"?`
-        : `Unknown ${label} "${name}" — no such resource found in the workspace.`,
-      vscode.DiagnosticSeverity.Warning
-    );
-    diagnostic.source = DIAGNOSTIC_SOURCE;
-    if (suggestion) diagnostic.code = `suggest:${suggestion}`;
-    diagnostics.push(diagnostic);
-  };
 
   const checkTriggerLike = (
     bindingRefs: RefName[],
@@ -268,7 +277,9 @@ function checkTriggerRefs(document: vscode.TextDocument, symbols: TektonSymbols,
     triggerRefNameRange?: [number, number]
   ) => {
     for (const ref of bindingRefs) {
-      flagUnknown(
+      flagUnknownIdentityRef(
+        document,
+        diagnostics,
         ref.range,
         ref.name,
         "TriggerBinding",
@@ -276,14 +287,18 @@ function checkTriggerRefs(document: vscode.TextDocument, symbols: TektonSymbols,
         () => workspaceIndex.allTriggerBindingNames()
       );
     }
-    flagUnknown(
+    flagUnknownIdentityRef(
+      document,
+      diagnostics,
       templateRefNameRange,
       templateRefName,
       "TriggerTemplate",
       (n) => workspaceIndex.lookupAllTriggerTemplateRecords(n),
       () => workspaceIndex.allTriggerTemplateNames()
     );
-    flagUnknown(
+    flagUnknownIdentityRef(
+      document,
+      diagnostics,
       triggerRefNameRange,
       triggerRefName,
       "Trigger",
@@ -304,6 +319,59 @@ function checkTriggerRefs(document: vscode.TextDocument, symbols: TektonSymbols,
     }
   } else if (symbols.kind === "Trigger") {
     checkTriggerLike(symbols.bindingRefs, symbols.templateRefName, symbols.templateRefNameRange);
+  }
+
+  return diagnostics;
+}
+
+/**
+ * Flags a Pipeline task entry's (or TaskRun's own) `taskRef`, and a
+ * PipelineRun's own `pipelineRef`, when the name doesn't resolve to
+ * anything the workspace index can see — the same "did you mean" check
+ * {@link checkTriggerRefs} already does for the trigger-family identities,
+ * just never previously extended to these two. A Pipeline task entry using
+ * an inline `taskSpec` instead of `taskRef` has no name to check in the
+ * first place (`taskRefName` is naturally unset), so it's silently skipped
+ * rather than flagged.
+ */
+function checkTaskAndPipelineRefs(document: vscode.TextDocument, symbols: TektonSymbols, workspaceIndex: TektonWorkspaceIndex): vscode.Diagnostic[] {
+  const diagnostics: vscode.Diagnostic[] = [];
+
+  for (const task of symbols.tasks) {
+    if (!task.taskRefName) continue;
+    flagUnknownIdentityRef(
+      document,
+      diagnostics,
+      task.taskRefNameRange,
+      task.taskRefName,
+      "Task",
+      (n) => workspaceIndex.lookupAllTaskRecords(n),
+      () => workspaceIndex.allTaskNames()
+    );
+  }
+
+  if (symbols.kind === "TaskRun" && symbols.taskRefName) {
+    flagUnknownIdentityRef(
+      document,
+      diagnostics,
+      symbols.taskRefNameRange,
+      symbols.taskRefName,
+      "Task",
+      (n) => workspaceIndex.lookupAllTaskRecords(n),
+      () => workspaceIndex.allTaskNames()
+    );
+  }
+
+  if (symbols.kind === "PipelineRun" && symbols.pipelineRefName) {
+    flagUnknownIdentityRef(
+      document,
+      diagnostics,
+      symbols.pipelineRefNameRange,
+      symbols.pipelineRefName,
+      "Pipeline",
+      (n) => workspaceIndex.lookupAllPipelineRecords(n),
+      () => workspaceIndex.allPipelineNames()
+    );
   }
 
   return diagnostics;
@@ -480,6 +548,7 @@ function computeResourceDiagnostics(
     ...checkTaskParamBindings(document, parsed.symbols, workspaceIndex),
     ...checkTaskParamWiring(document, parsed.symbols, workspaceIndex),
     ...checkMissingRunAfter(document, parsed),
+    ...checkTaskAndPipelineRefs(document, parsed.symbols, workspaceIndex),
     ...checkTriggerRefs(document, parsed.symbols, workspaceIndex),
     ...checkTriggerTemplateParamWiring(document, parsed.symbols, workspaceIndex),
     ...checkCelExpressions(document, parsed),
