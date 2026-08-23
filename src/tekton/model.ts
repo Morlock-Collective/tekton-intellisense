@@ -841,6 +841,55 @@ export function findEnclosingTaskEntry(parsed: ParsedTektonDoc, offset: number):
   return pipelineTaskEntryMaps(parsed).find((m) => m.range && offset >= m.range[0] && offset <= m.range[2]);
 }
 
+/** A task entry's (or TaskRun's own) `params: [{name, value}]` binding list, resolved against whatever `taskRefName` its `taskRef`/`resolver` points at — see {@link taskParamBindingLocationAt}. */
+export interface TaskParamBindingLocation {
+  taskRefName: string;
+  /** every param name this entry already binds (blank/in-progress ones don't have a name yet, so they're naturally absent here) */
+  boundNames: string[];
+}
+
+/**
+ * Finds a task entry's (or TaskRun's own) `params:` binding list at
+ * `offset`, for completion purposes — deliberately *not* based on
+ * `TaskSymbol.paramBindings`' own per-item ranges the way most identity-ref
+ * completion is, because those only exist once a binding's `name:` has a
+ * real (even partial) value; a *completely blank* one (`name: ` with
+ * nothing typed after it, the state completion is most useful in) has no
+ * scalar node at all to derive a range from. Checking whether `offset`
+ * falls anywhere within the `params:` *sequence's own* range sidesteps
+ * that — the sequence node itself stays validly parsed even while one of
+ * its items is still blank, the same reasoning
+ * `findEnclosingTaskEntry`/`findEnclosingStepEntry` already rely on for
+ * "which container is the cursor in" elsewhere in this codebase.
+ *
+ * Looks up `params:` as a *direct* child of the task entry's own map
+ * (`entryMap.get("params", true)`), which only ever finds that entry's own
+ * binding list, never `taskRef`'s differently-shaped nested `params:` (the
+ * `resolver: cluster` kind/name/namespace triple) — a child lookup can't
+ * see two levels down, so there's no ambiguity between the two same-named
+ * keys at different depths to resolve.
+ */
+export function taskParamBindingLocationAt(parsed: ParsedTektonDoc, offset: number): TaskParamBindingLocation | undefined {
+  const entryMap = findEnclosingTaskEntry(parsed, offset);
+  if (entryMap) {
+    const paramsSeq = seqOf(entryMap.get("params", true));
+    if (!paramsSeq?.range || offset < paramsSeq.range[0] || offset > paramsSeq.range[2]) return undefined;
+    const taskRef = identityRefNameAndRange(entryMap, "taskRef");
+    if (!taskRef.name) return undefined;
+    return { taskRefName: taskRef.name, boundNames: taskParamBindings(paramsSeq).map((b) => b.name) };
+  }
+
+  if (parsed.symbols.kind === "TaskRun" && parsed.symbols.taskRefName) {
+    const root = mapOf(parsed.doc.contents);
+    const spec = mapOf(root?.get("spec", true));
+    const paramsSeq = seqOf(spec?.get("params", true));
+    if (!paramsSeq?.range || offset < paramsSeq.range[0] || offset > paramsSeq.range[2]) return undefined;
+    return { taskRefName: parsed.symbols.taskRefName, boundNames: taskParamBindings(paramsSeq).map((b) => b.name) };
+  }
+
+  return undefined;
+}
+
 function stepAndSidecarEntriesOf(ownerMap: YAMLMap): YAMLMap[] {
   const maps: YAMLMap[] = [];
   for (const key of ["steps", "sidecars"]) {

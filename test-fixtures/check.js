@@ -2601,6 +2601,91 @@ console.log("\nCompletion provider: $(...) trigger refs and identity ref-name fi
   console.log(`  [${okTaskRun ? "PASS" : "FAIL"}] TaskRun's own params[].name also suggests the resolved task's declared params (${JSON.stringify(taskRunParamCompletions)})`);
   if (!okTaskRun) failures++;
 
+  // A *completely blank* name: value (nothing typed after it, no scalar node at all) has no
+  // committed AST range of its own -- the exact case reported not working. Position the cursor
+  // on the snippet's own last line to avoid ambiguity with the resolver's own "- name: ..." lines
+  // above it (both look similar as plain substrings).
+  function completeAtLastLine(text, workspaceIndex) {
+    const doc = makeDocument(text);
+    const lines = text.split("\n");
+    const lineIdx = lines.length - 1;
+    const position = new Position(lineIdx, lines[lineIdx].length);
+    const provider = new TektonRefCompletionProvider(workspaceIndex ?? {}, SCHEMAS_DIR);
+    return (provider.provideCompletionItems(doc, position) ?? []).map((i) => i.label);
+  }
+
+  const blankResolverSnippet = [
+    "apiVersion: tekton.dev/v1",
+    "kind: Pipeline",
+    "metadata:",
+    '  name: "my-pipeline"',
+    "spec:",
+    "  tasks:",
+    "    - name: some-task",
+    "      taskRef:",
+    '        resolver: "cluster"',
+    "        params:",
+    "          - name: kind",
+    "            value: task",
+    "          - name: name",
+    '            value: "build-image"',
+    "          - name: namespace",
+    "            value: my-namespace",
+    "      params:",
+    "        - name: ",
+  ].join("\n");
+  const blankResolverCompletions = completeAtLastLine(blankResolverSnippet, buildImageIndex);
+  const okBlankResolver =
+    blankResolverCompletions.includes("image") &&
+    blankResolverCompletions.includes("dockerfile") &&
+    blankResolverCompletions.includes("build-args");
+  console.log(
+    `  [${okBlankResolver ? "PASS" : "FAIL"}] completely blank "- name: " (cluster-resolver taskRef) still suggests the resolved task's params (${JSON.stringify(blankResolverCompletions)})`
+  );
+  if (!okBlankResolver) failures++;
+
+  const blankPlainSnippet = [
+    "apiVersion: tekton.dev/v1",
+    "kind: Pipeline",
+    "metadata:",
+    "  name: p",
+    "spec:",
+    "  tasks:",
+    "    - name: build",
+    "      taskRef:",
+    "        name: build-image",
+    "      params:",
+    "        - name: ",
+  ].join("\n");
+  const blankPlainCompletions = completeAtLastLine(blankPlainSnippet, buildImageIndex);
+  const okBlankPlain =
+    blankPlainCompletions.includes("image") &&
+    blankPlainCompletions.includes("dockerfile") &&
+    blankPlainCompletions.includes("build-args");
+  console.log(`  [${okBlankPlain ? "PASS" : "FAIL"}] completely blank "- name: " (plain taskRef) still suggests the resolved task's params (${JSON.stringify(blankPlainCompletions)})`);
+  if (!okBlankPlain) failures++;
+
+  // Sanity check that the "name:" line detection doesn't misfire on a *sibling* value: field --
+  // that shares the same enclosing params: sequence range, but isn't a name field at all.
+  const valueFieldSnippet = [
+    "apiVersion: tekton.dev/v1",
+    "kind: Pipeline",
+    "metadata:",
+    "  name: p",
+    "spec:",
+    "  tasks:",
+    "    - name: build",
+    "      taskRef:",
+    "        name: build-image",
+    "      params:",
+    "        - name: dockerfile",
+    "          value: ",
+  ].join("\n");
+  const valueFieldCompletions = completeAtLastLine(valueFieldSnippet, buildImageIndex);
+  const okValueFieldIgnored = !valueFieldCompletions.includes("image") && !valueFieldCompletions.includes("build-args");
+  console.log(`  [${okValueFieldIgnored ? "PASS" : "FAIL"}] a sibling "value:" field isn't mistaken for "name:" (${JSON.stringify(valueFieldCompletions)})`);
+  if (!okValueFieldIgnored) failures++;
+
   // Schema-key completion: falls through here whenever the cursor is inside neither a $(...) ref
   // nor an identity ref-name field -- e.g. a fresh line within a step's own map.
   const stepSnippet = [

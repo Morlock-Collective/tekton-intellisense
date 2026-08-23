@@ -543,21 +543,40 @@ highlighting/hover/rename treatment as a local one, for the same reason
 extending it cost nothing extra: the function was already fully general,
 it just hadn't been wired to that third call site yet.
 
-**Task param-binding-name completion** (`completions.ts`) — a Pipeline
-task entry's (or TaskRun's own) `params: [{name, value}]` binding now
-suggests the resolved task's actual declared param names, excluding
-whichever ones that same entry already binds elsewhere (the one under
-the cursor isn't excluded from its own suggestions, obviously). Reported
-missing once param-wiring *validation* started working for the
-`resolver: cluster` shape — but turned out to be missing for every
-taskRef shape, plain included; this had simply never been built.
-`taskParamBindingContextAt` is the direct counterpart to the
-already-existing `identityRefContextAt` (which completes `taskRef.name`
-itself): same "is the cursor on this scalar's committed range" pattern,
-reusing the exact `paramBindings`/`params` ranges diagnostics and rename
-already read, so it works identically regardless of how `taskRefName`
-was resolved — plain `taskRef: {name: ...}` or the cluster resolver
-shape both flow through the one shared field.
+**Task param-binding-name completion** (`completions.ts`,
+`model.ts#taskParamBindingLocationAt`) — a Pipeline task entry's (or
+TaskRun's own) `params: [{name, value}]` binding now suggests the
+resolved task's actual declared param names, excluding whichever ones
+that same entry already binds elsewhere. Reported missing once
+param-wiring *validation* started working for the `resolver: cluster`
+shape — but turned out to be missing for every taskRef shape, plain
+included; this had simply never been built.
+
+The first version of this reused `TaskSymbol.paramBindings`' own
+per-binding ranges (the same "is the cursor on this scalar's committed
+range" pattern `identityRefContextAt` already uses for `taskRef.name`
+itself) — which turned out to still not work for the case completion
+matters most: a *completely blank* `name: ` with nothing typed after
+it has no scalar node at all, so there's no per-binding range to find
+in the first place. Reworked to check whether the cursor falls
+anywhere within the enclosing `params:` **sequence's own** range
+instead — that node stays validly parsed even while one of its items
+is still blank, the same reasoning `findEnclosingTaskEntry`/
+`findEnclosingStepEntry` already rely on elsewhere for "which container
+is the cursor in." Looking up `params:` as a *direct* child of the task
+entry's own map is what keeps this from ever confusing it with
+`taskRef`'s differently-shaped nested `params:` (the resolver's own
+kind/name/namespace triple) — a child lookup can't see two levels down,
+so there's no ambiguity to resolve between the two same-named keys.
+
+Since the sequence-range check alone doesn't distinguish a `name:` field
+from a sibling `value:` field sharing the same sequence, `completions.ts`
+gates it on the current line's own text matching `name:` (optionally
+`- name:`) before ever calling into it, and derives the replace range
+from that same text match rather than an AST range that might not
+exist — the one piece of this that's genuinely text-based instead of
+AST-based, and deliberately so, since a blank value has nothing in the
+AST to point at.
 
 **Unknown taskRef/pipelineRef validation** (`diagnostics.ts`) — a Pipeline
 task entry's (or TaskRun's own) `taskRef`, and a PipelineRun's own

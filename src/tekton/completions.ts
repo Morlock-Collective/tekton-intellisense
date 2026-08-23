@@ -1,5 +1,13 @@
 import * as vscode from "vscode";
-import { parseTektonFile, findResourceAt, ParsedTektonDoc, TASK_LIKE_KINDS, TektonSymbols, TRIGGER_BINDING_LIKE_KINDS } from "./model";
+import {
+  parseTektonFile,
+  findResourceAt,
+  ParsedTektonDoc,
+  TASK_LIKE_KINDS,
+  TektonSymbols,
+  TRIGGER_BINDING_LIKE_KINDS,
+  taskParamBindingLocationAt,
+} from "./model";
 import { TektonWorkspaceIndex } from "./workspaceIndex";
 import { CONTEXT_TREE } from "./contextVariables";
 import { loadSchema } from "./jsonSchemas";
@@ -109,51 +117,29 @@ function identityRefContextAt(symbols: TektonSymbols, offset: number): IdentityR
   return undefined;
 }
 
-interface TaskParamBindingContext {
-  /** offset range of the binding's `name` scalar under the cursor */
-  range: [number, number];
-  /** the resolved Task/ClusterTask/StepAction this binding is providing a value to */
-  taskRefName: string;
-  /** every *other* param name this same task entry (or TaskRun) already binds, so they're excluded from suggestions -- the one at `range` itself isn't, since that's exactly what's being replaced */
-  siblingNames: string[];
-}
-
 /**
- * Finds a Pipeline task entry's (or TaskRun's own) `params: [{name, value}]`
- * binding-name scalar at `offset`, if any — the counterpart to
- * {@link identityRefContextAt} for suggesting *which params a resolved
- * task actually declares*, rather than which task/pipeline/etc. exists.
- * Reuses the exact same `taskRefName`/`paramBindings` ranges
- * `diagnostics.ts`'s param-wiring checks and rename already read, so this
- * works identically whether the entry uses a plain `taskRef: {name: ...}`
- * or Tekton's `resolver: cluster` shape — whatever resolved `taskRefName`,
- * not how it got there.
+ * The range to replace when completing a `name:` field's *value* on the
+ * current line, from `document`/`position` text alone — used for task
+ * param-binding-name completion (see {@link taskParamBindingLocationAt}),
+ * since that's resolved from the enclosing `params:` sequence's own AST
+ * range rather than the binding's own (which a completely blank `name: `
+ * doesn't have at all, the state completion is most useful in — so there's
+ * no scalar range to derive a replace span from the usual way).
+ * Undefined unless the text immediately before the cursor, on this line,
+ * is exactly `<indent><"- ">?name:<whitespace>` — i.e. the cursor is
+ * really positioned right after a `name:` key's colon (plus whatever
+ * whitespace/partial value follows), not somewhere else entirely that
+ * happens to share a `params:` sequence's range (its sibling `value:`
+ * field, for one).
  */
-function taskParamBindingContextAt(symbols: TektonSymbols, offset: number): TaskParamBindingContext | undefined {
-  for (const task of symbols.tasks) {
-    if (!task.taskRefName) continue;
-    for (const pb of task.paramBindings) {
-      if (inOffsetRange(pb.range, offset)) {
-        return {
-          range: pb.range!,
-          taskRefName: task.taskRefName,
-          siblingNames: task.paramBindings.filter((other) => other !== pb).map((other) => other.name),
-        };
-      }
-    }
-  }
-  if (symbols.kind === "TaskRun" && symbols.taskRefName) {
-    for (const p of symbols.params) {
-      if (inOffsetRange(p.range, offset)) {
-        return {
-          range: p.range!,
-          taskRefName: symbols.taskRefName,
-          siblingNames: symbols.params.filter((other) => other !== p).map((other) => other.name),
-        };
-      }
-    }
-  }
-  return undefined;
+const NAME_FIELD_PREFIX = /^\s*(-\s+)?name:\s*/;
+
+function nameFieldValueRange(document: vscode.TextDocument, position: vscode.Position): vscode.Range | undefined {
+  const line = document.lineAt(position.line).text;
+  const beforeCursor = line.slice(0, position.character);
+  const m = NAME_FIELD_PREFIX.exec(beforeCursor);
+  if (!m) return undefined;
+  return new vscode.Range(new vscode.Position(position.line, m[0].length), position);
 }
 
 function item(
@@ -225,7 +211,7 @@ export class TektonRefCompletionProvider implements vscode.CompletionItemProvide
     const ctx = getRefContext(document, position);
     if (ctx) return this.completionsFor(ctx, parsed);
 
-    const identity = this.identityCompletionsFor(document, position, parsed.symbols);
+    const identity = this.identityCompletionsFor(document, position, parsed);
     if (identity) return identity;
 
     // Falls through here for "what key goes here" completion (e.g. suggesting `script` inside a
@@ -237,25 +223,31 @@ export class TektonRefCompletionProvider implements vscode.CompletionItemProvide
   private identityCompletionsFor(
     document: vscode.TextDocument,
     position: vscode.Position,
-    symbols: TektonSymbols
+    parsed: ParsedTektonDoc
   ): vscode.CompletionItem[] | undefined {
     const offset = document.offsetAt(position);
 
-    const target = identityRefContextAt(symbols, offset);
+    const target = identityRefContextAt(parsed.symbols, offset);
     if (target) {
       const replaceRange = new vscode.Range(document.positionAt(target.range[0]), document.positionAt(target.range[1]));
       return target.names(this.workspaceIndex).map((name) => item(name, replaceRange, vscode.CompletionItemKind.Reference, target.detail));
     }
 
-    const paramTarget = taskParamBindingContextAt(symbols, offset);
-    if (paramTarget) {
-      const resolved = this.workspaceIndex.lookupTask(paramTarget.taskRefName);
-      if (!resolved) return undefined;
-      const already = new Set(paramTarget.siblingNames);
-      const replaceRange = new vscode.Range(document.positionAt(paramTarget.range[0]), document.positionAt(paramTarget.range[1]));
-      return resolved.params
-        .filter((p) => !already.has(p.name))
-        .map((p) => item(p.name, replaceRange, vscode.CompletionItemKind.Variable, `param of ${paramTarget.taskRefName}`));
+    // Only even attempted on a line that's really "name:" (plus whatever's typed after it) --
+    // taskParamBindingLocationAt matches by the enclosing params: *sequence's* own range, which
+    // also covers a sibling value: field, so this is what keeps it from firing there too.
+    const nameRange = nameFieldValueRange(document, position);
+    if (nameRange) {
+      const location = taskParamBindingLocationAt(parsed, offset);
+      if (location) {
+        const resolved = this.workspaceIndex.lookupTask(location.taskRefName);
+        if (resolved) {
+          const already = new Set(location.boundNames);
+          return resolved.params
+            .filter((p) => !already.has(p.name))
+            .map((p) => item(p.name, nameRange, vscode.CompletionItemKind.Variable, `param of ${location.taskRefName}`));
+        }
+      }
     }
 
     return undefined;
