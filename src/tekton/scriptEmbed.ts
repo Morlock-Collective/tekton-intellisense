@@ -139,23 +139,14 @@ const LINE_COMMENT_PREFIX: Record<string, string> = {
 };
 
 /**
- * A template gap's id, encoded as invisible characters rather than visible
- * text, so a marker line can show the *actual* original template as
- * readable context (what a plain "a Helm template was here" placeholder
- * can't) while staying robust to the user editing or reformatting around
- * it — recovery only needs this exact invisible span to survive, not the
- * visible text next to it. `GAP_ID_START`/`GAP_ID_END` (INVISIBLE
- * SEPARATOR / INVISIBLE PLUS) bound the span so it can be found reliably;
- * each bit of a fixed-width binary encoding of the id is one of two
- * zero-width characters (ZERO WIDTH SPACE / ZERO WIDTH NON-JOINER),
- * chosen because both survive ordinary text editing, clipboard
- * round-trips, and most formatters untouched -- unlike, say, a literal
- * NUL or other control character, which tools are far more likely to
- * strip or choke on. Built via `String.fromCharCode` rather than written
- * as literal characters in this file, deliberately -- an *actual*
- * invisible character sitting in the source would be unreviewable by eye
- * and at real risk of an editor/formatter silently normalizing or
- * stripping it on save.
+ * SECURITY NOTE: hides a gap's id in invisible Unicode (zero-width
+ * chars) so a marker can show the real template text for context yet
+ * still be found if the user edits around it. Safe: it decodes to
+ * nothing but an array index, lives only in a comment in the throwaway
+ * scratch file, and never reaches the host document -- restoreTemplateGaps
+ * always replaces the whole marker line, discarding it. Built via
+ * `String.fromCharCode`, not literal characters, so it stays reviewable
+ * and immune to editor/formatter mangling.
  */
 const GAP_ID_START = String.fromCharCode(0x2063); // INVISIBLE SEPARATOR
 const GAP_ID_END = String.fromCharCode(0x2064); // INVISIBLE PLUS
