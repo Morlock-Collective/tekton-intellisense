@@ -43,6 +43,7 @@ const {
 } = require("../out/tekton/renameTarget");
 const { validateAgainstSchema } = require("../out/tekton/schemaValidation");
 const { checkCelExpression, celIssuesInSource, tokenizeCelForHighlighting, celHighlightTokensInSource } = require("../out/tekton/celExpr");
+const { fetchClusterResources, isClusterResourceKind } = require("../out/tekton/clusterResources");
 const { findCelExpressions } = require("../out/tekton/model");
 const YAML = require("yaml");
 const SCHEMAS_DIR = path.join(__dirname, "..", "schemas");
@@ -3064,5 +3065,132 @@ spec:
   if (!foldedOk) failures++;
 }
 
-console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) FAILED.`);
-process.exit(failures === 0 ? 0 : 1);
+// Everything above is synchronous; fetchClusterResources is the one async piece of logic in this
+// whole file (it issues concurrent fake "kubectl" calls), so the final summary/exit is deferred
+// until this resolves rather than converting the rest of the file to async.
+async function runAsyncChecks() {
+  console.log("\nCluster resource fetching (clusterResources.ts):");
+  {
+    const okKindCheck =
+      isClusterResourceKind("Task") &&
+      isClusterResourceKind("ClusterTask") &&
+      isClusterResourceKind("StepAction") &&
+      !isClusterResourceKind("PipelineRun") &&
+      !isClusterResourceKind("Unknown") &&
+      !isClusterResourceKind(42);
+    console.log(`  [${okKindCheck ? "PASS" : "FAIL"}] isClusterResourceKind recognizes the 7 fetchable kinds, rejects everything else`);
+    if (!okKindCheck) failures++;
+  }
+
+  {
+    const calls = [];
+    const runner = async (command, args) => {
+      calls.push({ command, args });
+      if (args.includes("tasks.tekton.dev")) {
+        return JSON.stringify({
+          items: [
+            {
+              apiVersion: "tekton.dev/v1",
+              kind: "Task",
+              metadata: { name: "shared-build", namespace: "shared-tasks", uid: "abc-123", resourceVersion: "999" },
+              spec: { params: [{ name: "image", type: "string" }], steps: [{ name: "build", image: "alpine" }] },
+              status: { conditions: [] },
+            },
+          ],
+        });
+      }
+      return JSON.stringify({ items: [] });
+    };
+
+    const config = { command: "kubectl", sources: [{ namespace: "shared-tasks", kinds: ["Task"] }] };
+    const result = await fetchClusterResources(config, { runner });
+
+    const call = calls.find((c) => c.args.includes("tasks.tekton.dev"));
+    const okNamespacedArgs = !!call && call.command === "kubectl" && call.args.includes("-n") && call.args.includes("shared-tasks");
+    console.log(`  [${okNamespacedArgs ? "PASS" : "FAIL"}] namespaced kind fetched with "-n <namespace>" (${JSON.stringify(call && call.args)})`);
+    if (!okNamespacedArgs) failures++;
+
+    const okResource =
+      result.resources.length === 1 &&
+      result.resources[0].kind === "Task" &&
+      result.resources[0].name === "shared-build" &&
+      result.resources[0].namespace === "shared-tasks";
+    console.log(`  [${okResource ? "PASS" : "FAIL"}] fetched resource shape correct (${JSON.stringify(result.resources)})`);
+    if (!okResource) failures++;
+
+    const yamlText = result.resources[0].yamlText;
+    const okNoServerNoise = !yamlText.includes("uid:") && !yamlText.includes("resourceVersion:") && !yamlText.includes("status:");
+    const reparsed = parseTektonDocument(yamlText);
+    const okReparse =
+      reparsed &&
+      reparsed.symbols.kind === "Task" &&
+      reparsed.symbols.metadataName === "shared-build" &&
+      reparsed.symbols.params.map((p) => p.name).join(",") === "image";
+    console.log(
+      `  [${okNoServerNoise && okReparse ? "PASS" : "FAIL"}] server-bookkeeping fields stripped, re-serialized YAML round-trips through parseTektonDocument`
+    );
+    if (!okNoServerNoise || !okReparse) {
+      console.log({ yamlText });
+      failures++;
+    }
+
+    console.log(`  [${result.errors.length === 0 ? "PASS" : "FAIL"}] no errors reported for a clean fetch`);
+    if (result.errors.length !== 0) failures++;
+  }
+
+  {
+    // ClusterTask is cluster-scoped: no "-n" flag, and fetched only once even though two source
+    // entries both ask for it.
+    const calls = [];
+    const runner = async (command, args) => {
+      calls.push(args);
+      return JSON.stringify({ items: [] });
+    };
+    const config = {
+      command: "kubectl",
+      sources: [
+        { namespace: "team-a", kinds: ["ClusterTask"] },
+        { namespace: "team-b", kinds: ["ClusterTask"] },
+      ],
+    };
+    await fetchClusterResources(config, { runner });
+    const okDeduped = calls.length === 1;
+    const okNoNamespaceFlag = calls[0] && !calls[0].includes("-n");
+    console.log(`  [${okDeduped && okNoNamespaceFlag ? "PASS" : "FAIL"}] cluster-scoped kind (ClusterTask) fetched once, without "-n", even when two sources request it`);
+    if (!okDeduped || !okNoNamespaceFlag) {
+      console.log({ calls });
+      failures++;
+    }
+  }
+
+  {
+    // One source failing doesn't block another from succeeding, and the failure is reported
+    // rather than silently swallowed.
+    const runner = async (command, args) => {
+      if (args.includes("shared-tasks")) throw new Error("namespaces \"shared-tasks\" not found");
+      return JSON.stringify({
+        items: [{ apiVersion: "tekton.dev/v1", kind: "Task", metadata: { name: "other-task", namespace: "other-ns" }, spec: {} }],
+      });
+    };
+    const config = {
+      command: "kubectl",
+      sources: [
+        { namespace: "shared-tasks", kinds: ["Task"] },
+        { namespace: "other-ns", kinds: ["Pipeline"] },
+      ],
+    };
+    const result = await fetchClusterResources(config, { runner });
+    const okPartialSuccess = result.resources.length === 1 && result.resources[0].name === "other-task";
+    const okErrorReported = result.errors.length === 1 && result.errors[0].namespace === "shared-tasks" && /not found/.test(result.errors[0].message);
+    console.log(`  [${okPartialSuccess && okErrorReported ? "PASS" : "FAIL"}] one source failing doesn't block another from succeeding, and is reported in errors`);
+    if (!okPartialSuccess || !okErrorReported) {
+      console.log({ result });
+      failures++;
+    }
+  }
+
+  console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) FAILED.`);
+  process.exit(failures === 0 ? 0 : 1);
+}
+
+void runAsyncChecks();

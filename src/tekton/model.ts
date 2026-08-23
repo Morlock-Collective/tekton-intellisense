@@ -138,6 +138,24 @@ export interface TektonSymbols {
 export const TASK_LIKE_KINDS: ReadonlySet<TektonKind> = new Set(["Task", "ClusterTask", "StepAction"]);
 export const TRIGGER_BINDING_LIKE_KINDS: ReadonlySet<TektonKind> = new Set(["TriggerBinding", "ClusterTriggerBinding"]);
 
+/** Which kinds share one name index, since they're resolved by the same bare name (a taskRef resolves against Task/ClusterTask/StepAction alike, a binding ref against TriggerBinding/ClusterTriggerBinding alike) -- shared between `workspaceIndex.ts` and `clusterIndex.ts`, which each build their own index of the same shape from a different source. */
+export type IndexGroup = "task" | "pipeline" | "triggerTemplate" | "triggerBinding" | "trigger";
+
+export const GROUP_KINDS: Record<IndexGroup, ReadonlySet<TektonKind>> = {
+  task: TASK_LIKE_KINDS,
+  pipeline: new Set(["Pipeline"]),
+  triggerTemplate: new Set(["TriggerTemplate"]),
+  triggerBinding: TRIGGER_BINDING_LIKE_KINDS,
+  trigger: new Set(["Trigger"]),
+};
+
+export function groupFor(kind: TektonKind): IndexGroup | undefined {
+  for (const group of Object.keys(GROUP_KINDS) as IndexGroup[]) {
+    if (GROUP_KINDS[group].has(kind)) return group;
+  }
+  return undefined;
+}
+
 export interface ParsedTektonDoc {
   doc: Document.Parsed;
   lineCounter: LineCounter;

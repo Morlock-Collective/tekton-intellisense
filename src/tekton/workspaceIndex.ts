@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
-import { parseTektonFile, ParsedTektonDoc, TASK_LIKE_KINDS, TRIGGER_BINDING_LIKE_KINDS, TektonKind, TektonSymbols } from "./model";
+import { parseTektonFile, ParsedTektonDoc, IndexGroup, groupFor, TektonSymbols } from "./model";
+import type { ClusterResourceIndex } from "./clusterIndex";
 import { YAML_GLOB, EXCLUDE_GLOB, readWorkspaceFileText } from "./workspaceScan";
 
 export interface IndexedResource {
@@ -19,30 +20,6 @@ export interface IndexedResource {
  * in one file).
  */
 type NameIndex = Map<string, Map<string, IndexedResource>>;
-
-type IndexGroup = "task" | "pipeline" | "triggerTemplate" | "triggerBinding" | "trigger";
-
-/**
- * Which document kinds share one name index. Kinds resolved by the same bare
- * name share a group (Task/ClusterTask/StepAction via taskRef,
- * TriggerBinding/ClusterTriggerBinding via a binding ref); Task and Pipeline
- * don't, since taskRef/pipelineRef resolve independently even if a name
- * coincidentally collides between them.
- */
-const GROUP_KINDS: Record<IndexGroup, ReadonlySet<TektonKind>> = {
-  task: TASK_LIKE_KINDS,
-  pipeline: new Set(["Pipeline"]),
-  triggerTemplate: new Set(["TriggerTemplate"]),
-  triggerBinding: TRIGGER_BINDING_LIKE_KINDS,
-  trigger: new Set(["Trigger"]),
-};
-
-function groupFor(kind: TektonKind): IndexGroup | undefined {
-  for (const group of Object.keys(GROUP_KINDS) as IndexGroup[]) {
-    if (GROUP_KINDS[group].has(kind)) return group;
-  }
-  return undefined;
-}
 
 interface GroupState {
   byName: NameIndex;
@@ -83,6 +60,8 @@ export class TektonWorkspaceIndex implements vscode.Disposable {
   private reindexTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /** Every resourceKey a given file (by uriKey) currently owns, across all groups — so a re-index or removal can wipe exactly its own previous entries, however many documents it holds, without touching any other file's. */
   private resourceKeysByUri = new Map<string, string[]>();
+  /** Optional fallback source for names this workspace doesn't declare itself -- a cluster-shared Task/Pipeline/etc. living in another namespace. A local declaration always wins on a name collision; see the lookup methods below. */
+  private clusterIndex: ClusterResourceIndex | undefined;
 
   private readonly changeEmitter = new vscode.EventEmitter<void>();
   /**
@@ -203,7 +182,13 @@ export class TektonWorkspaceIndex implements vscode.Disposable {
     this.changeEmitter.fire();
   }
 
-  private lookupRecord(group: IndexGroup, name: string): IndexedResource | undefined {
+  /** Registers `clusterIndex` as the fallback source for names this workspace doesn't declare itself, and forwards its change events into {@link onDidChangeIndex} so callers only ever need to listen to one thing. Call once during activation. */
+  setClusterIndex(clusterIndex: ClusterResourceIndex): void {
+    this.clusterIndex = clusterIndex;
+    this.disposables.push(clusterIndex.onDidChange(() => this.changeEmitter.fire()));
+  }
+
+  private lookupLocalRecord(group: IndexGroup, name: string): IndexedResource | undefined {
     const byUri = this.groups[group].byName.get(name);
     if (!byUri || byUri.size === 0) return undefined;
     // Multiple files can legitimately declare the same metadata.name (a
@@ -216,13 +201,21 @@ export class TektonWorkspaceIndex implements vscode.Disposable {
     return byUri.get(firstKey);
   }
 
+  /** A local (workspace-file) declaration always wins over a same-named cluster-fetched one -- no surprise shadowing of what's actually in front of the user by something fetched from elsewhere. */
+  private lookupRecord(group: IndexGroup, name: string): IndexedResource | undefined {
+    return this.lookupLocalRecord(group, name) ?? this.clusterIndex?.lookupRecord(group, name);
+  }
+
   private lookupAllRecords(group: IndexGroup, name: string): IndexedResource[] {
     const byUri = this.groups[group].byName.get(name);
-    return byUri ? [...byUri.values()] : [];
+    const local = byUri ? [...byUri.values()] : [];
+    return [...local, ...(this.clusterIndex?.lookupAllRecords(group, name) ?? [])];
   }
 
   private allNames(group: IndexGroup): string[] {
-    return [...this.groups[group].byName.keys()];
+    const local = this.groups[group].byName.keys();
+    const cluster = this.clusterIndex?.allNames(group) ?? [];
+    return [...new Set([...local, ...cluster])];
   }
 
   /** Looks up a Task/ClusterTask/StepAction's declared symbols by its metadata.name (i.e. what a taskRef points at). */
