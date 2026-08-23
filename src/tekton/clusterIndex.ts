@@ -159,10 +159,25 @@ export class ClusterResourceIndex implements vscode.Disposable {
       return;
     }
 
-    const { resources, errors } = await fetchClusterResources(config);
+    const { resources, errors, commandError } = await fetchClusterResources(config);
     this.rebuild(resources);
     this.lastFetchedAt = Date.now();
-    this.lastErrorCount = errors.length;
+    this.lastErrorCount = errors.length + (commandError ? 1 : 0);
+
+    // Unlike a per-source error (which might be transient -- RBAC, a bad namespace, the cluster
+    // being briefly unreachable -- and not worth nagging about on every quiet background refresh),
+    // the configured command not existing at all is a static misconfiguration that will fail
+    // identically every single time until fixed. Always surfaced visibly, manual or not.
+    if (commandError) {
+      this.outputChannel.appendLine(`[${new Date().toISOString()}] ${commandError}`);
+      void vscode.window
+        .showWarningMessage(`Tekton Intellisense: ${commandError}`, "Show Output")
+        .then((choice) => {
+          if (choice === "Show Output") this.outputChannel.show();
+        });
+      this.changeEmitter.fire();
+      return;
+    }
 
     for (const err of errors) {
       this.outputChannel.appendLine(`[${new Date().toISOString()}] ${err.kind} in "${err.namespace}": ${err.message}`);

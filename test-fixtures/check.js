@@ -3256,8 +3256,11 @@ async function runAsyncChecks() {
       ],
     };
     await fetchClusterResources(config, { runner });
-    const okDeduped = calls.length === 1;
-    const okNoNamespaceFlag = calls[0] && !calls[0].includes("-n");
+    // One "version --client" pre-flight call always happens first (see below); only the real
+    // "get" calls are what dedup applies to.
+    const getCalls = calls.filter((c) => c[0] === "get");
+    const okDeduped = getCalls.length === 1;
+    const okNoNamespaceFlag = getCalls[0] && !getCalls[0].includes("-n");
     console.log(`  [${okDeduped && okNoNamespaceFlag ? "PASS" : "FAIL"}] cluster-scoped kind (ClusterTask) fetched once, without "-n", even when two sources request it`);
     if (!okDeduped || !okNoNamespaceFlag) {
       console.log({ calls });
@@ -3286,6 +3289,61 @@ async function runAsyncChecks() {
     const okErrorReported = result.errors.length === 1 && result.errors[0].namespace === "shared-tasks" && /not found/.test(result.errors[0].message);
     console.log(`  [${okPartialSuccess && okErrorReported ? "PASS" : "FAIL"}] one source failing doesn't block another from succeeding, and is reported in errors`);
     if (!okPartialSuccess || !okErrorReported) {
+      console.log({ result });
+      failures++;
+    }
+  }
+
+  {
+    // The configured command doesn't exist at all (e.g. it's really only a shell alias, which
+    // execFile -- never going through a shell -- can't see) -- one clear, actionable message
+    // instead of the same raw ENOENT repeated once per (namespace, kind) pair.
+    const calls = [];
+    const runner = async (command, args) => {
+      calls.push(args);
+      const err = new Error(`spawn ${command} ENOENT`);
+      err.code = "ENOENT";
+      throw err;
+    };
+    const config = {
+      command: "kubectl",
+      sources: [
+        { namespace: "shared-tasks", kinds: ["Task"] },
+        { namespace: "shared-tasks", kinds: ["Pipeline"] },
+      ],
+    };
+    const result = await fetchClusterResources(config, { runner });
+    const okOneAttempt = calls.length === 1; // short-circuits before ever attempting a real fetch
+    const okCommandError =
+      typeof result.commandError === "string" &&
+      /kubectl.*not.*runnable|not found on PATH/i.test(result.commandError) &&
+      /alias|function/i.test(result.commandError);
+    const okNoResourcesOrErrors = result.resources.length === 0 && result.errors.length === 0;
+    console.log(
+      `  [${okOneAttempt && okCommandError && okNoResourcesOrErrors ? "PASS" : "FAIL"}] ENOENT on the configured command short-circuits to one commandError mentioning the shell-alias possibility, not per-source noise (${JSON.stringify(result.commandError)})`
+    );
+    if (!okOneAttempt || !okCommandError || !okNoResourcesOrErrors) {
+      console.log({ calls, result });
+      failures++;
+    }
+  }
+
+  {
+    // A command that exists but fails "version --client" for some unrelated reason (e.g. an old
+    // client, a wrapper script with its own exit code) must NOT be treated as "not found" -- only
+    // an actual ENOENT short-circuits. Real per-source fetches still get a chance to run.
+    const runner = async (command, args) => {
+      if (args[0] === "version") throw new Error("unknown flag: --client");
+      return JSON.stringify({
+        items: [{ apiVersion: "tekton.dev/v1", kind: "Task", metadata: { name: "shared-build", namespace: "shared-tasks" }, spec: {} }],
+      });
+    };
+    const config = { command: "kubectl", sources: [{ namespace: "shared-tasks", kinds: ["Task"] }] };
+    const result = await fetchClusterResources(config, { runner });
+    const okNoCommandError = result.commandError === undefined;
+    const okStillFetched = result.resources.length === 1 && result.resources[0].name === "shared-build";
+    console.log(`  [${okNoCommandError && okStillFetched ? "PASS" : "FAIL"}] a non-ENOENT failure on the pre-flight check doesn't block the real fetch`);
+    if (!okNoCommandError || !okStillFetched) {
       console.log({ result });
       failures++;
     }

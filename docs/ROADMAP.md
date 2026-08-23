@@ -457,6 +457,20 @@ actions that deserve a visible outcome. Authentication itself is left
 entirely to the user's own kubeconfig/session; this extension never
 touches credentials.
 
+Also found by live testing: a `kubectl` that only exists as a shell
+alias or function (works fine typed at a prompt) fails with a raw
+`spawn kubectl ENOENT`, once per (namespace, kind) pair, and nothing in
+the message hints why — `execFile` never goes through a shell, so it
+genuinely can't see an alias/function that only exists inside one.
+`fetchClusterResources` now runs `<command> version --client` once as a
+pre-flight check before attempting any real fetch; on an actual ENOENT
+(and only that — a command that exists but fails `version --client`
+for some unrelated reason, an old client or a wrapper script with its
+own exit code, isn't treated as "missing," the real fetches still get
+a chance to run) it short-circuits to one message suggesting the
+alias/function possibility directly, rather than the same unexplained
+ENOENT repeated per source.
+
 A fetched resource has no real workspace file, but Go to Definition still
 needs somewhere to jump to — each gets a synthetic, read-only
 `tekton-cluster:` document (its own `TextDocumentContentProvider`), built

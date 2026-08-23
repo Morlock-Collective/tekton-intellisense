@@ -78,6 +78,17 @@ export interface ClusterFetchError {
 export interface ClusterFetchResult {
   resources: FetchedResource[];
   errors: ClusterFetchError[];
+  /**
+   * Set instead of attempting any per-source fetch at all, when the
+   * configured command couldn't even be spawned (see
+   * {@link commandUnavailableMessage}) — one clear, actionable message
+   * instead of the same "ENOENT" repeated once per (namespace, kind) pair,
+   * which is what happened before this existed: `execFile` never goes
+   * through a shell, so a `kubectl` that's really only a shell alias or
+   * function (works fine typed at a prompt) fails to spawn at all, and the
+   * raw ENOENT gave no hint why.
+   */
+  commandError?: string;
 }
 
 /** `(command, args, timeoutMs) -> stdout`, swappable for tests. The real one below never involves a shell. */
@@ -86,10 +97,42 @@ export type CommandRunner = (command: string, args: string[], timeoutMs: number)
 export const defaultRunner: CommandRunner = (command, args, timeoutMs) =>
   new Promise((resolve, reject) => {
     execFile(command, args, { timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
-      if (err) reject(new Error((stderr || "").trim() || err.message));
-      else resolve(stdout);
+      if (!err) {
+        resolve(stdout);
+        return;
+      }
+      const wrapped = new Error((stderr || "").trim() || err.message) as NodeJS.ErrnoException;
+      // execFile's own error.code is string | number | undefined (an exit code is a number; a
+      // spawn failure like ENOENT is a string) -- only the string form is ever a spawn-failure code.
+      if (typeof err.code === "string") wrapped.code = err.code;
+      reject(wrapped);
     });
   });
+
+/**
+ * Runs `<command> version --client` purely to check whether `command` can
+ * be spawned at all, before attempting any real (namespace, kind) fetch —
+ * returns a message when it can't, undefined when it can (or when it ran
+ * but failed for some *other* reason, e.g. an ancient client that doesn't
+ * recognize `--client`; that's not this check's business, the real
+ * per-source fetches will surface their own more specific errors).
+ */
+async function commandUnavailableMessage(runner: CommandRunner, command: string, timeoutMs: number): Promise<string | undefined> {
+  try {
+    await runner(command, ["version", "--client"], timeoutMs);
+    return undefined;
+  } catch (err) {
+    const code = err instanceof Error ? (err as NodeJS.ErrnoException).code : undefined;
+    if (code !== "ENOENT") return undefined;
+    return (
+      `"${command}" isn't a runnable command (not found on PATH). ` +
+      `If it works when you type it in a terminal, it's likely a shell alias or function — ` +
+      `those only exist inside an interactive shell, not for a program spawning it directly. ` +
+      `Set tektonIntellisense.clusterResources.command to the real executable's path instead ` +
+      `(try "which ${command}" or "type ${command}" in your terminal to find it).`
+    );
+  }
+}
 
 /** Server-managed bookkeeping fields that are noise in a read-only "what does this look like" preview -- the user never wrote them and can't edit them anyway. */
 const NOISY_TOP_LEVEL_FIELDS = ["status"];
@@ -155,6 +198,9 @@ export async function fetchClusterResources(
 ): Promise<ClusterFetchResult> {
   const runner = opts.runner ?? defaultRunner;
   const timeoutMs = opts.timeoutMs ?? 15000;
+
+  const commandError = await commandUnavailableMessage(runner, config.command, timeoutMs);
+  if (commandError) return { resources: [], errors: [], commandError };
 
   const resources: FetchedResource[] = [];
   const errors: ClusterFetchError[] = [];
