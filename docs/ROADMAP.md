@@ -682,6 +682,40 @@ finished indexing) still fall back to the previous `params: []`, exactly
 as before this existed — nothing to pre-fill for a Task the extension
 doesn't know about.
 
+One more QOL round on the same command: the `taskRef` name prompt is now
+a `pickOrTypeName` (`editUtils.ts`) instead of a plain `showInputBox` —
+autocomplete against `workspaceIndex.allTaskNames()` (so the required-
+param pre-fill above actually has something to find, in the common case
+of referencing a Task that already exists) while still accepting free
+text for a name the extension doesn't know about, same as before. Built
+on `createQuickPick` rather than the `showQuickPick` convenience wrapper,
+since only the live picker exposes `onDidChangeValue` — needed to keep a
+synthetic "use what I typed" item (labeled `(new)`) in sync as the user
+types, since `showQuickPick` only ever returns one of the items it was
+given. `QuickPick` has no `InputBox`-style `validationMessage`, so an
+invalid typed name surfaces as that synthetic item's own description
+instead, and is still rejected on accept (kept for the same K8s-name
+format the input box used to enforce) — a name picked from the known list
+is never re-validated, since it already exists. Generic enough to reuse
+wherever a future command wants the same "pick or type" shape for another
+cross-referenced name (`pipelineRef`, a rename target, ...), not
+addTask-specific despite living behind this one feature for now.
+
+Picked up a latent test-infrastructure bug while adding this: `pickOrTypeName`
+tests needed their own `vscode.window.createQuickPick` shim, and — since
+Node's `require()` cache is keyed by file path regardless of which
+`vscode` shim was active when a module first loaded — a THIRD section
+now transitively loading `editUtils.ts`'s compiled output (after the
+`addTask` and `insertBlockAfter` tests already established their own
+shims) risked silently reusing whichever shim got there first, however
+incomplete it was for this section's own needs. Added a
+`clearCompiledCommandsCache()` helper (clears any cached
+`out/commands/*.js` entries) that every vscode-shimmed section touching
+`commands/` now calls first, so each one is self-contained regardless of
+what ran before it or in what order — the two earlier sections were
+retrofitted to call it too, closing off the whole class of bug rather
+than just this one instance of it.
+
 ## Notable bugs found and fixed along the way
 
 - Multi-line inserts only indented their first line correctly; the trailing

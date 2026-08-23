@@ -101,8 +101,10 @@ of future improvement.
     `pipelineSpec`/`taskSpec`, in which case it gets a declaration there.
   - `Tekton: Add Task to Pipeline` — appends a new `spec.tasks[]` (or
     `spec.finally[]`) entry with a `taskRef`/`runAfter`/`params` skeleton,
-    to a Pipeline or a PipelineRun's inline `pipelineSpec`. Choose a local
-    task (`taskRef: { name: ... }`) or a cluster-resolved one (Tekton's
+    to a Pipeline or a PipelineRun's inline `pipelineSpec`. The taskRef
+    name offers every known Task as you type, but still accepts a name
+    the extension doesn't know about. Choose a local task
+    (`taskRef: { name: ... }`) or a cluster-resolved one (Tekton's
     `resolver: cluster` shape, with a namespace picked from your
     configured cluster sources or typed in). If the referenced Task is
     already known, its required params are pre-filled with blank values

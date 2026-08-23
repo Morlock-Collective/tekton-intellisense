@@ -10,6 +10,65 @@ export function indentAt(document: vscode.TextDocument, position: vscode.Positio
   return match ? match[0] : "";
 }
 
+/**
+ * Free-text entry with autocomplete against a known-names list — unlike
+ * `showQuickPick`, which only ever returns one of the offered items,
+ * whatever's typed is always accepted too (as a distinct, clearly labeled
+ * item so it's obvious that's what's about to happen), since the known
+ * list is never a closed set: a cluster resource that hasn't been fetched
+ * yet, a Task defined in a file this workspace doesn't index, or one that
+ * simply doesn't exist yet are all legitimate things to type here. Built
+ * on `createQuickPick` (not the `showQuickPick` convenience wrapper)
+ * because only the live picker exposes `onDidChangeValue`, needed to keep
+ * the "use what I typed" item in sync as the user types — VS Code's own
+ * fuzzy filtering narrows `knownNames` for free, this only adds the one
+ * extra item. Returns `undefined` on cancel (Escape, or accepting with
+ * nothing typed and nothing selected).
+ *
+ * `validate`, if given, only ever applies to a freshly typed name, not one
+ * picked from `knownNames` — those already exist, so re-validating their
+ * format here would just be second-guessing whatever created them.
+ */
+export async function pickOrTypeName(
+  placeHolder: string,
+  knownNames: string[],
+  initialValue?: string,
+  validate?: (value: string) => string | undefined
+): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    const picker = vscode.window.createQuickPick();
+    picker.placeholder = placeHolder;
+    picker.value = initialValue ?? "";
+
+    const knownItems = knownNames.map((label) => ({ label }));
+    const refreshItems = () => {
+      const typed = picker.value.trim();
+      const isNew = typed.length > 0 && !knownNames.includes(typed);
+      // QuickPick has no InputBox-style validationMessage -- surface an invalid typed name as the
+      // "new" item's own description instead, and still block accepting it in onDidAccept below.
+      const problem = isNew ? validate?.(typed) : undefined;
+      picker.items = isNew ? [{ label: typed, description: problem ?? "(new)" }, ...knownItems] : knownItems;
+    };
+    refreshItems();
+    picker.onDidChangeValue(refreshItems);
+
+    let settled = false;
+    const finish = (value: string | undefined) => {
+      if (settled) return;
+      settled = true;
+      picker.dispose();
+      resolve(value);
+    };
+    picker.onDidAccept(() => {
+      const chosen = picker.selectedItems[0]?.label ?? (picker.value.trim() || undefined);
+      if (chosen !== undefined && !knownNames.includes(chosen) && validate?.(chosen)) return;
+      finish(chosen);
+    });
+    picker.onDidHide(() => finish(undefined));
+    picker.show();
+  });
+}
+
 /** Converts a param/workspace name into a conventional SCREAMING_SNAKE_CASE env var name. */
 export function toEnvVarName(name: string): string {
   const snake = name

@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import { findSeqIn, parseTektonFile, findResourceAt, resolvePipelineSpecOwner, trimTrailingNewline } from "../tekton/model";
-import { indentAt, insertBlockAfter } from "./editUtils";
+import { indentAt, insertBlockAfter, pickOrTypeName } from "./editUtils";
 import { quoteYamlString } from "./snippetText";
 import { TektonWorkspaceIndex } from "../tekton/workspaceIndex";
 
@@ -100,11 +100,12 @@ export async function addTaskCommand(workspaceIndex: TektonWorkspaceIndex): Prom
   });
   if (!taskName) return;
 
-  const taskRef = await vscode.window.showInputBox({
-    prompt: "taskRef name (Task this step runs)",
-    value: taskName,
-    validateInput: K8S_NAME_VALIDATION,
-  });
+  const taskRef = await pickOrTypeName(
+    "taskRef name (Task this step runs) — pick a known one, or type a new name",
+    workspaceIndex.allTaskNames(),
+    taskName,
+    K8S_NAME_VALIDATION
+  );
   if (!taskRef) return;
 
   const kindPick = await vscode.window.showQuickPick(

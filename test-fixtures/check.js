@@ -51,6 +51,22 @@ const SCHEMAS_DIR = path.join(__dirname, "..", "schemas");
 
 let failures = 0;
 
+/**
+ * Sections that need a "vscode" shim to load a vscode-dependent compiled module (editUtils.ts,
+ * addTask.ts, completions.ts, ...) each build their own shim tailored to what they're driving.
+ * But require()'s module cache is keyed by resolved file path, independent of which shim was
+ * active at load time -- a module already cached from an earlier section's (possibly narrower)
+ * shim would silently keep using THAT shim's captured "vscode" even when a later section expects
+ * its own. Clearing any previously cached out/commands/*.js entries before each such section
+ * makes every section's shim self-contained, regardless of what ran before it or in what order.
+ */
+function clearCompiledCommandsCache() {
+  const commandsDir = path.join(__dirname, "..", "out", "commands") + path.sep;
+  for (const key of Object.keys(require.cache)) {
+    if (key.startsWith(commandsDir)) delete require.cache[key];
+  }
+}
+
 console.log("quoteYamlString round-trip check:");
 for (const c of ['plain text', 'has "quotes" inside', "back\\slash", "colon: here", "cost is $5", "multi\nline", "tab\there"]) {
   const line = "value: " + quoteYamlString(c);
@@ -1100,13 +1116,10 @@ console.log("\naddTask simulation (context-aware target + no cursor):");
 
 console.log("\naddTask: local vs cluster-resolved taskRef (addTask.ts's taskRefLines):");
 {
-  // addTask.ts imports "vscode" at module scope, and itself imports editUtils.ts (which does
-  // touch vscode.Position/Range/Selection, just not until insertBlockAfter is actually called) --
-  // taskRefLines needs none of that, but Node's require() cache is keyed by file path regardless
-  // of which shim was active when a module first loaded, and editUtils.ts is required again later
-  // (with a fuller shim) by the insertBlockAfter test below. Using a shim with fewer classes than
-  // that one here would poison the cached editUtils.js module for that later test, so this reuses
-  // the same minimal-but-complete shim rather than an empty one.
+  // addTask.ts imports "vscode" at module scope, and itself imports editUtils.ts -- taskRefLines/
+  // paramsLines need none of what either touches, but clearCompiledCommandsCache() first keeps
+  // this section's shim from leaking into (or being leaked into by) any other section's.
+  clearCompiledCommandsCache();
   class Position {
     constructor(line, character) {
       this.line = line;
@@ -3794,6 +3807,7 @@ async function runAsyncChecks() {
   // mutable-document/editor shim instead of re-deriving the splicing logic a second time.
   console.log("\ninsertBlockAfter (editUtils.ts): correct indentation after a deeply nested last item:");
   {
+    clearCompiledCommandsCache();
     class Position {
       constructor(line, character) {
         this.line = line;
@@ -3907,6 +3921,119 @@ spec:
     if (!okIndent || !okParses) {
       console.log(result);
       failures++;
+    }
+  }
+
+  console.log("\npickOrTypeName (editUtils.ts): pick a known name or type a new one:");
+  {
+    clearCompiledCommandsCache();
+
+    // A controllable fake QuickPick -- createQuickPick() returns a fresh one per call, captured
+    // via createdPickers so the test can drive whichever invocation it just triggered (show(),
+    // onDidChangeValue/onDidAccept/onDidHide are all synchronous here, unlike the real editor, so
+    // driving one is just calling its private _setValue/_accept/_hide helpers directly).
+    const createdPickers = [];
+    function makeFakePicker() {
+      const listeners = { change: [], accept: [], hide: [] };
+      const picker = {
+        placeholder: undefined,
+        value: "",
+        items: [],
+        selectedItems: [],
+        onDidChangeValue: (cb) => listeners.change.push(cb),
+        onDidAccept: (cb) => listeners.accept.push(cb),
+        onDidHide: (cb) => listeners.hide.push(cb),
+        show: () => {},
+        dispose: () => {
+          picker.disposed = true;
+        },
+        _setValue(v) {
+          picker.value = v;
+          listeners.change.forEach((cb) => cb());
+        },
+        _accept(selectedLabel) {
+          picker.selectedItems = selectedLabel ? [{ label: selectedLabel }] : [];
+          listeners.accept.forEach((cb) => cb());
+        },
+        _hide() {
+          listeners.hide.forEach((cb) => cb());
+        },
+      };
+      createdPickers.push(picker);
+      return picker;
+    }
+
+    const vscodeShim = { window: { createQuickPick: makeFakePicker } };
+    const Module = require("module");
+    const originalLoad = Module._load;
+    Module._load = function (request, ...rest) {
+      if (request === "vscode") return vscodeShim;
+      return originalLoad.call(this, request, ...rest);
+    };
+    const { pickOrTypeName } = require("../out/commands/editUtils");
+    Module._load = originalLoad;
+
+    const knownNames = ["build-image", "deploy-app"];
+
+    // Picking one of the known names.
+    {
+      const resultPromise = pickOrTypeName("pick a task", knownNames, "build-image");
+      const picker = createdPickers[createdPickers.length - 1];
+      const initialItemsOk = JSON.stringify(picker.items) === JSON.stringify(knownNames.map((label) => ({ label })));
+      picker._accept("build-image");
+      const result = await resultPromise;
+      const ok = result === "build-image" && initialItemsOk && picker.disposed;
+      console.log(`  [${ok ? "PASS" : "FAIL"}] accepting a known item resolves its name, initial items are exactly the known list (${result})`);
+      if (!ok) failures++;
+    }
+
+    // Typing a brand new name -- shows up as its own "(new)" item, and typing+accepting with
+    // nothing selected still resolves it (free text always wins over needing a picked item).
+    {
+      const resultPromise = pickOrTypeName("pick a task", knownNames, "");
+      const picker = createdPickers[createdPickers.length - 1];
+      picker._setValue("brand-new-task");
+      const newItemOk = picker.items[0]?.label === "brand-new-task" && picker.items[0]?.description === "(new)";
+      picker._accept(undefined);
+      const result = await resultPromise;
+      const ok = result === "brand-new-task" && newItemOk;
+      console.log(`  [${ok ? "PASS" : "FAIL"}] typing a new name shows it as its own "(new)" item, accepting with nothing selected still resolves it (${result})`);
+      if (!ok) failures++;
+    }
+
+    // Validation only applies to a freshly typed name -- a name already in knownNames is never
+    // re-validated (it exists already; second-guessing its format here would be pointless).
+    {
+      const validate = (v) => (/^[a-z0-9-]+$/.test(v) ? undefined : "must be lowercase alphanumeric/hyphens");
+      const resultPromise = pickOrTypeName("pick a task", knownNames, "", validate);
+      const picker = createdPickers[createdPickers.length - 1];
+
+      picker._setValue("Bad Name");
+      const invalidShowsProblem = picker.items[0]?.description === "must be lowercase alphanumeric/hyphens";
+      picker._accept(undefined); // invalid -- must NOT resolve or dispose
+      const stillOpenAfterInvalidAccept = !picker.disposed;
+
+      picker._setValue("good-name");
+      const validShowsNew = picker.items[0]?.description === "(new)";
+      picker._accept(undefined);
+      const result = await resultPromise;
+
+      const ok = invalidShowsProblem && stillOpenAfterInvalidAccept && validShowsNew && result === "good-name";
+      console.log(
+        `  [${ok ? "PASS" : "FAIL"}] invalid typed name blocks acceptance and shows the validation message; a valid one still gets through (${result})`
+      );
+      if (!ok) failures++;
+    }
+
+    // Cancelling (Escape -> onDidHide, no prior accept) resolves undefined.
+    {
+      const resultPromise = pickOrTypeName("pick a task", knownNames, "");
+      const picker = createdPickers[createdPickers.length - 1];
+      picker._hide();
+      const result = await resultPromise;
+      const ok = result === undefined;
+      console.log(`  [${ok ? "PASS" : "FAIL"}] cancelling (hide with no accept) resolves undefined`);
+      if (!ok) failures++;
     }
   }
 
